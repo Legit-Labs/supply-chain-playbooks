@@ -402,158 +402,24 @@ investigation relies on checking for artifacts on each machine.
 
 **Important:** The malware uses postinstall self-deletion — after execution, it deletes
 `setup.js` and replaces `package.json` with a clean stub. Inspecting `node_modules`
-will NOT reveal the dropper. Focus on the RAT artifacts, npm cache, and tool logs.
+will NOT reveal the dropper.
 
-> **Dedicated workstation playbook:** For a comprehensive, step-by-step workstation
-> investigation (including AI agent conversation scanning, npm cache shasum checks,
-> OS persistence mechanisms, and network indicators), see
-> [workstation-playbook.md](workstation-playbook.md).
+Use the dedicated [workstation-playbook.md](workstation-playbook.md) for each
+developer machine. It covers:
 
-### 1. Check for RAT artifacts
+1. RAT artifact detection (macOS, Windows, Linux)
+2. OS persistence mechanisms (LaunchAgents, Scheduled Tasks, cron/systemd)
+3. npm cache inspection (package listing + content-addressable shasum search)
+4. Lock file and `node_modules` scanning across local projects
+5. Network indicators (active connections, DNS, hosts file)
+6. Shell history
+7. npm debug logs
+8. AI agent conversation log forensics (Claude Code, Cursor, Windsurf, Copilot)
+9. Docker images built during the exposure window
 
-**macOS:**
-```bash
-# RAT binary disguised as Apple cache daemon
-ls -la /Library/Caches/com.apple.act.mond 2>/dev/null && echo "FOUND — COMPROMISED" || echo "clean"
+### Exfiltration repos
 
-# Check if it's running
-ps aux | grep -i "com.apple.act.mond" | grep -v grep
-
-# Check for persistence in LaunchAgents/LaunchDaemons
-grep -rl "com.apple.act.mond\|sfrclak\|142.11.206.73" \
-  ~/Library/LaunchAgents/ /Library/LaunchAgents/ /Library/LaunchDaemons/ 2>/dev/null
-```
-
-**Windows:**
-```powershell
-# RAT binary disguised as Windows Terminal
-Test-Path "$env:PROGRAMDATA\wt.exe"
-
-# VBScript and PowerShell dropper (may have self-deleted)
-Test-Path "$env:TEMP\6202033.vbs"
-Test-Path "$env:TEMP\6202033.ps1"
-
-# Check running processes
-Get-Process | Where-Object { $_.Path -like "*wt.exe" -and $_.Path -like "*ProgramData*" }
-
-# Check persistence in scheduled tasks and registry
-Get-ScheduledTask | Where-Object { $_.Actions.Execute -like "*wt.exe*" -or $_.Actions.Execute -like "*6202033*" }
-```
-
-**Linux:**
-```bash
-# Python RAT script
-ls -la /tmp/ld.py 2>/dev/null && echo "FOUND — COMPROMISED" || echo "clean"
-
-# Check if it's running (nohup'd to PID 1)
-ps aux | grep "ld.py" | grep -v grep
-
-# Check persistence in cron/systemd
-crontab -l 2>/dev/null | grep -E "ld\.py|sfrclak|142\.11\.206\.73"
-```
-
-### 2. Check npm cache for compromised packages
-
-The npm cache may still contain the compromised tarball even if node_modules was cleaned.
-Check both the package listing and the content-addressable store by shasum:
-
-```bash
-# High-level listing
-npm cache ls 2>/dev/null | grep -E "axios.*(1\.14\.1|0\.30\.4)" || echo "not in cache"
-npm cache ls 2>/dev/null | grep "plain-crypto-js" || echo "not in cache"
-
-# Deep check: search content-addressable store by known compromised shasums
-NPM_CACHE=$(npm config get cache 2>/dev/null)
-if [ -d "$NPM_CACHE/_cacache" ]; then
-  grep -rl "2553649f2322049666871cea80a5d0d6adc700ca" "$NPM_CACHE/_cacache" 2>/dev/null \
-    && echo "FOUND — axios 1.14.1 shasum in cache"
-  grep -rl "d6f3f62fd3b9f5432f5782b62d8cfd5247d5ee71" "$NPM_CACHE/_cacache" 2>/dev/null \
-    && echo "FOUND — axios 0.30.4 shasum in cache"
-  grep -rl "07d889e2dadce6f3910dcbc253317d28ca61c766" "$NPM_CACHE/_cacache" 2>/dev/null \
-    && echo "FOUND — plain-crypto-js shasum in cache"
-fi
-```
-
-### 3. Check network indicators
-
-```bash
-# Active connections to C2 IP
-netstat -an 2>/dev/null | grep "142.11.206.73" \
-  && echo "FOUND — active C2 connection" || echo "C2 IP not in active connections"
-
-# C2 domain in hosts file
-grep "sfrclak.com" /etc/hosts 2>/dev/null
-
-# macOS DNS query log
-log show --predicate 'process == "mDNSResponder" && composedMessage contains "sfrclak.com"' \
-  --last 7d 2>/dev/null | head -20
-```
-
-### 4. Check shell history
-
-```bash
-grep -E "axios@(1\.14\.1|0\.30\.4)|plain-crypto-js" \
-  ~/.zsh_history ~/.bash_history 2>/dev/null \
-  || echo "No compromised package references in shell history"
-```
-
-### 5. Check lock files and node_modules in local projects
-
-```bash
-PROJECT_ROOT="${HOME}/projects"  # adjust as needed
-
-# Lock files
-find "$PROJECT_ROOT" -maxdepth 5 \
-  \( -name "package-lock.json" -o -name "yarn.lock" -o -name "pnpm-lock.yaml" \) \
-  -not -path "*/node_modules/*" 2>/dev/null | while read lockfile; do
-  if grep -qE "axios.*(1\.14\.1|0\.30\.4)|plain-crypto-js" "$lockfile" 2>/dev/null; then
-    echo "COMPROMISED: $lockfile"
-  fi
-done
-
-# Phantom dependency in node_modules
-find "$PROJECT_ROOT" -maxdepth 5 -path "*/node_modules/plain-crypto-js" -type d 2>/dev/null
-```
-
-### 6. Check npm debug logs
-
-```bash
-NPM_LOGS="${HOME}/.npm/_logs"
-if [ -d "$NPM_LOGS" ]; then
-  grep -rl "axios.*\(1\.14\.1\|0\.30\.4\)\|plain-crypto-js\|sfrclak\|142\.11\.206\.73" \
-    "$NPM_LOGS"/ 2>/dev/null \
-    && echo "FOUND — IOC match in npm debug logs" || echo "No IOC matches in npm logs"
-fi
-```
-
-### 7. Check AI agent conversation logs
-
-AI coding agents store conversation histories with full tool outputs. If an agent
-ran `npm install` during the exposure window, the resolved versions are captured.
-
-```bash
-# Claude Code sessions
-find ~/.claude/projects -name "*.jsonl" -print0 2>/dev/null \
-  | xargs -0 grep -l "axios.*\(1\.14\.1\|0\.30\.4\)\|plain-crypto-js\|sfrclak\|142\.11\.206\.73" 2>/dev/null
-```
-
-**Important:** Matches may be from sessions that *discussed* the playbook, not
-sessions that ran compromised installs. For matched files, verify whether the
-session contains actual npm bash commands. See
-[workstation-playbook.md](workstation-playbook.md) Check 8 for the classification
-script.
-
-### 8. Docker images built locally
-
-```bash
-docker images --format '{{.Repository}}:{{.Tag}} {{.CreatedAt}}' 2>/dev/null | grep "2026-03-31"
-```
-
-Rebuild suspicious images with `docker build --no-cache`.
-
-### 9. Exfiltration repos
-
-Check if any repos were created in the org during the exposure window (fallback exfil):
+Also check if any repos were created in the org during the exposure window (fallback exfil):
 ```bash
 gh api --paginate "/orgs/$ORG/repos?per_page=100&sort=created&direction=desc" \
   --jq '.[] | select(.created_at > "2026-03-31T00:00:00Z" and .created_at < "2026-03-31T05:00:00Z") | "\(.name) | \(.created_at) | \(.visibility)"'
