@@ -38,6 +38,7 @@ targeting macOS, Windows, and Linux. The malware contacts a C2 server, delivers
 platform-specific payloads, then self-deletes to evade forensic detection.
 
 - [Playbook](axios/playbook.md) — detection, CI log analysis, persistence checks, evidence tables, and hardening
+- [Workstation Playbook](axios/workstation-playbook.md) — dedicated workstation investigation: RAT artifacts, npm cache shasums, OS persistence, network indicators, npm debug logs, AI agent conversation scanning
 
 ---
 

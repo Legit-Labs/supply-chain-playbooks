@@ -54,8 +54,11 @@ script deploys a cross-platform RAT.
 ### What IS affected
 
 - Any `npm install` that resolved `axios@1.14.1` or `axios@0.30.4` during the window
-- Transitive installs — packages that depend on axios
-- Docker image builds that `npm install axios` during the window
+- **Transitive installs** — `npm install <some-package>` where that package
+  depends on `axios@^1.x` or `axios@^0.x`. This is especially dangerous because
+  axios may not appear anywhere in the CI log output at default verbosity.
+  Many popular npm packages depend on axios transitively.
+- Docker image builds that run `npm install` during the window
 - Developer machines that installed or upgraded axios during the window
 
 ### What is NOT affected
@@ -63,6 +66,8 @@ script deploys a cross-platform RAT.
 - Installs from a committed lock file with `npm ci` (lock file pins exact version)
 - Any axios version other than 1.14.1 and 0.30.4
 - Pre-built Docker images that were not rebuilt during the window
+- `npm install <package>` where the package does NOT depend on axios (directly
+  or transitively)
 
 ### Lock file protection
 
@@ -76,6 +81,9 @@ Lock files do NOT help if:
 - No lock file is committed
 - CI uses `npm install` (can update the lock file and resolve to latest)
 - The lock file was generated during the exposure window
+- CI runs `npm install <package>` for a package **not in the lock file** — the
+  lock file only covers packages it already contains. Dynamically installed
+  packages resolve from the registry regardless of the lock file.
 
 ---
 
@@ -172,7 +180,7 @@ Note in findings as requiring follow-up with the image vendor.
 Write `$LOG_DIR/evidence-repos.csv`:
 
 ```
-repo,path,manifest_spec,spec_in_range,has_lockfile,lockfile_version,lock_protects,install_command,install_upgrades,can_be_compromised
+repo,path,source_type,manifest_spec,spec_in_range,has_lockfile,lockfile_version,lock_protects,install_command,install_upgrades,can_be_compromised
 ```
 
 **Column guide:**
@@ -180,8 +188,9 @@ repo,path,manifest_spec,spec_in_range,has_lockfile,lockfile_version,lock_protect
 | Column | What to write |
 |---|---|
 | `repo` | Repo name (no org prefix) |
-| `path` | Subdirectory (use `/` for root) |
-| `manifest_spec` | Exact specifier as written (`^1.13.6`). `transitive` if not a direct dep |
+| `path` | Full file path where the reference was found (e.g. `extension/package.json`, `.github/workflows/build.yaml`, `Dockerfile`) |
+| `source_type` | Type of file: `manifest`, `lockfile`, `ci-workflow`, `dockerfile`, `script`, `helm` |
+| `manifest_spec` | For manifests: exact specifier as written (`^1.13.6`). For CI workflows/scripts: the exact install command. For transitive deps: `transitive` |
 | `spec_in_range` | `yes (allows 1.14.1)` or `yes (allows 0.30.4)` or `no (reason)`. `^1.x` allows 1.14.1. `^0.21.x` allows 0.30.4. Always explain |
 | `has_lockfile` | `yes (package-lock.json)` / `yes (yarn.lock)` / `no`. Always include type |
 | `lockfile_version` | Exact pinned version (e.g. `1.13.2`). `none` if no lock file |
@@ -261,7 +270,8 @@ grep -rliE "com\.apple\.act\.mond|wt\.exe|6202033|ld\.py" "$LOG_DIR"/run-*.log
 ### 4. Classify hits as real installs vs false positives
 
 **Real npm install indicators** (axios WAS installed):
-- `added axios@<version>` or `added N packages`
+- `added axios@<version>` (only visible with `--loglevel verbose`)
+- `added N packages` (default output — does NOT list individual packages)
 - `npm http fetch GET https://registry.npmjs.org/axios`
 - `npm http fetch GET https://registry.npmjs.org/axios/-/axios-<version>.tgz`
 - `postinstall` script execution output from `plain-crypto-js`
@@ -309,41 +319,241 @@ repo,run_id,workflow,platform,install_command,log_line,version_installed,lock_re
 
 ---
 
-## Phase 3: Check for Persistence
+## Phase 3: Network Investigation (Firewall / Proxy / DNS Logs)
 
-The axios malware uses postinstall self-deletion: after execution, it deletes
-`setup.js` and replaces `package.json` with a clean stub. **Post-infection
-inspection of `node_modules` will NOT reveal the malware.** CI logs are the
-only reliable detection method (which is why Phase 2 exists).
+The malware contacts `sfrclak.com` on port `8000` at endpoint `/6202033`.
+Check network logs for any connection to the C2 infrastructure during or after
+the exposure window.
 
-### RAT artifacts
+### What to look for
 
-Share these commands with teams to check developer machines and servers:
+| IOC | Where to search |
+|---|---|
+| DNS resolution of `sfrclak.com` | DNS logs, DNS proxy, Pi-hole, Cloudflare Gateway, etc. |
+| Connection to `142.11.206.73` | Firewall logs, VPC flow logs, proxy logs |
+| Connection to port `8000` on that IP | Firewall logs, proxy logs |
+| HTTP POST to `/6202033` | Proxy logs, WAF logs (if TLS-inspected) |
+| POST body containing `packages.npm.org/product0` (macOS), `product1` (Windows), `product2` (Linux) | Proxy logs with body inspection |
+| User-Agent: `mozilla/4.0 (compatible; msie 8.0; windows nt 5.1; trident/4.0)` | Proxy logs — deliberately mimics IE 8 on Windows XP, highly anomalous on modern systems |
+
+### Where to check
+
+**Cloud environments:**
+- AWS: VPC Flow Logs, CloudTrail (if DNS query logging is enabled), Route 53 Resolver query logs
+- GCP: VPC Flow Logs, Cloud DNS query logs
+- Azure: NSG Flow Logs, Azure DNS Analytics
+
+**On-premise / corporate network:**
+- Firewall (Palo Alto, Fortinet, etc.) — search for destination IP `142.11.206.73` or destination port `8000`
+- Web proxy (Zscaler, Squid, etc.) — search for domain `sfrclak.com`
+- DNS server logs — search for `sfrclak.com` resolution
+- SIEM (Splunk, Elastic, etc.) — correlate across sources
+
+**CI runners:**
+- Self-hosted runners: check the host's network logs
+- GitHub-hosted runners: no direct network log access, but proxy/firewall at the network edge may have captured egress
+
+### Time window
+
+Search from `2026-03-31T00:00:00Z` to at least `2026-04-01T00:00:00Z` — the RAT
+may have persisted and continued beaconing after the initial infection.
+
+### Example queries
+
+**Splunk:**
+```
+index=firewall dest_ip="142.11.206.73" OR dest_port=8000
+| stats count by src_ip, dest_ip, dest_port, action
+```
+
+```
+index=dns query="sfrclak.com"
+| stats count by src_ip, query, answer
+```
+
+**Elastic/Kibana:**
+```
+destination.ip: "142.11.206.73" OR dns.question.name: "sfrclak.com"
+```
+
+**AWS CloudWatch Logs Insights (VPC Flow Logs):**
+```
+filter dstAddr = "142.11.206.73"
+| stats count(*) as hits by srcAddr, dstPort, action
+```
+
+### Interpret results
+
+- **DNS resolution of `sfrclak.com` found:** A machine attempted contact. Check which
+  machine, whether the connection succeeded, and whether data was transferred.
+- **Connection to `142.11.206.73:8000` found:** The RAT dropper ran and reached the C2.
+  Treat the source machine as compromised — rotate all credentials on it.
+- **No results:** The C2 was not contacted from your network. This is consistent with
+  a clean finding from Phases 1 and 2, but does not rule out compromise if the machine
+  had direct internet access bypassing your proxy/firewall.
+
+---
+
+## Phase 4: Workstation Investigation
+
+Developer machines that ran `npm install` or `npm update` during the exposure window
+may have installed the compromised version. Unlike CI (where we have logs), workstation
+investigation relies on checking for artifacts on each machine.
+
+**Important:** The malware uses postinstall self-deletion — after execution, it deletes
+`setup.js` and replaces `package.json` with a clean stub. Inspecting `node_modules`
+will NOT reveal the dropper. Focus on the RAT artifacts, npm cache, and tool logs.
+
+> **Dedicated workstation playbook:** For a comprehensive, step-by-step workstation
+> investigation (including AI agent conversation scanning, npm cache shasum checks,
+> OS persistence mechanisms, and network indicators), see
+> [workstation-playbook.md](workstation-playbook.md).
+
+### 1. Check for RAT artifacts
 
 **macOS:**
 ```bash
+# RAT binary disguised as Apple cache daemon
 ls -la /Library/Caches/com.apple.act.mond 2>/dev/null && echo "FOUND — COMPROMISED" || echo "clean"
+
+# Check if it's running
+ps aux | grep -i "com.apple.act.mond" | grep -v grep
+
+# Check for persistence in LaunchAgents/LaunchDaemons
+grep -rl "com.apple.act.mond\|sfrclak\|142.11.206.73" \
+  ~/Library/LaunchAgents/ /Library/LaunchAgents/ /Library/LaunchDaemons/ 2>/dev/null
 ```
 
 **Windows:**
 ```powershell
-Test-Path "$env:PROGRAMDATA\wt.exe"; Test-Path "$env:TEMP\6202033.vbs"; Test-Path "$env:TEMP\6202033.ps1"
+# RAT binary disguised as Windows Terminal
+Test-Path "$env:PROGRAMDATA\wt.exe"
+
+# VBScript and PowerShell dropper (may have self-deleted)
+Test-Path "$env:TEMP\6202033.vbs"
+Test-Path "$env:TEMP\6202033.ps1"
+
+# Check running processes
+Get-Process | Where-Object { $_.Path -like "*wt.exe" -and $_.Path -like "*ProgramData*" }
+
+# Check persistence in scheduled tasks and registry
+Get-ScheduledTask | Where-Object { $_.Actions.Execute -like "*wt.exe*" -or $_.Actions.Execute -like "*6202033*" }
 ```
 
 **Linux:**
 ```bash
+# Python RAT script
 ls -la /tmp/ld.py 2>/dev/null && echo "FOUND — COMPROMISED" || echo "clean"
+
+# Check if it's running (nohup'd to PID 1)
+ps aux | grep "ld.py" | grep -v grep
+
+# Check persistence in cron/systemd
+crontab -l 2>/dev/null | grep -E "ld\.py|sfrclak|142\.11\.206\.73"
 ```
 
-### Docker images
+### 2. Check npm cache for compromised packages
 
-Any Docker image that ran `npm install` during the window may have the RAT baked
-into a layer. The malware self-deletes from `node_modules` but the RAT binary
-persists at the OS-level paths above. Rebuild with `docker build --no-cache`.
+The npm cache may still contain the compromised tarball even if node_modules was cleaned.
+Check both the package listing and the content-addressable store by shasum:
 
-### Exfiltration repos
+```bash
+# High-level listing
+npm cache ls 2>/dev/null | grep -E "axios.*(1\.14\.1|0\.30\.4)" || echo "not in cache"
+npm cache ls 2>/dev/null | grep "plain-crypto-js" || echo "not in cache"
 
-Check if any repos were created during the exposure window (fallback exfil method):
+# Deep check: search content-addressable store by known compromised shasums
+NPM_CACHE=$(npm config get cache 2>/dev/null)
+if [ -d "$NPM_CACHE/_cacache" ]; then
+  grep -rl "2553649f2322049666871cea80a5d0d6adc700ca" "$NPM_CACHE/_cacache" 2>/dev/null \
+    && echo "FOUND — axios 1.14.1 shasum in cache"
+  grep -rl "d6f3f62fd3b9f5432f5782b62d8cfd5247d5ee71" "$NPM_CACHE/_cacache" 2>/dev/null \
+    && echo "FOUND — axios 0.30.4 shasum in cache"
+  grep -rl "07d889e2dadce6f3910dcbc253317d28ca61c766" "$NPM_CACHE/_cacache" 2>/dev/null \
+    && echo "FOUND — plain-crypto-js shasum in cache"
+fi
+```
+
+### 3. Check network indicators
+
+```bash
+# Active connections to C2 IP
+netstat -an 2>/dev/null | grep "142.11.206.73" \
+  && echo "FOUND — active C2 connection" || echo "C2 IP not in active connections"
+
+# C2 domain in hosts file
+grep "sfrclak.com" /etc/hosts 2>/dev/null
+
+# macOS DNS query log
+log show --predicate 'process == "mDNSResponder" && composedMessage contains "sfrclak.com"' \
+  --last 7d 2>/dev/null | head -20
+```
+
+### 4. Check shell history
+
+```bash
+grep -E "axios@(1\.14\.1|0\.30\.4)|plain-crypto-js" \
+  ~/.zsh_history ~/.bash_history 2>/dev/null \
+  || echo "No compromised package references in shell history"
+```
+
+### 5. Check lock files and node_modules in local projects
+
+```bash
+PROJECT_ROOT="${HOME}/projects"  # adjust as needed
+
+# Lock files
+find "$PROJECT_ROOT" -maxdepth 5 \
+  \( -name "package-lock.json" -o -name "yarn.lock" -o -name "pnpm-lock.yaml" \) \
+  -not -path "*/node_modules/*" 2>/dev/null | while read lockfile; do
+  if grep -qE "axios.*(1\.14\.1|0\.30\.4)|plain-crypto-js" "$lockfile" 2>/dev/null; then
+    echo "COMPROMISED: $lockfile"
+  fi
+done
+
+# Phantom dependency in node_modules
+find "$PROJECT_ROOT" -maxdepth 5 -path "*/node_modules/plain-crypto-js" -type d 2>/dev/null
+```
+
+### 6. Check npm debug logs
+
+```bash
+NPM_LOGS="${HOME}/.npm/_logs"
+if [ -d "$NPM_LOGS" ]; then
+  grep -rl "axios.*\(1\.14\.1\|0\.30\.4\)\|plain-crypto-js\|sfrclak\|142\.11\.206\.73" \
+    "$NPM_LOGS"/ 2>/dev/null \
+    && echo "FOUND — IOC match in npm debug logs" || echo "No IOC matches in npm logs"
+fi
+```
+
+### 7. Check AI agent conversation logs
+
+AI coding agents store conversation histories with full tool outputs. If an agent
+ran `npm install` during the exposure window, the resolved versions are captured.
+
+```bash
+# Claude Code sessions
+find ~/.claude/projects -name "*.jsonl" -print0 2>/dev/null \
+  | xargs -0 grep -l "axios.*\(1\.14\.1\|0\.30\.4\)\|plain-crypto-js\|sfrclak\|142\.11\.206\.73" 2>/dev/null
+```
+
+**Important:** Matches may be from sessions that *discussed* the playbook, not
+sessions that ran compromised installs. For matched files, verify whether the
+session contains actual npm bash commands. See
+[workstation-playbook.md](workstation-playbook.md) Check 8 for the classification
+script.
+
+### 8. Docker images built locally
+
+```bash
+docker images --format '{{.Repository}}:{{.Tag}} {{.CreatedAt}}' 2>/dev/null | grep "2026-03-31"
+```
+
+Rebuild suspicious images with `docker build --no-cache`.
+
+### 9. Exfiltration repos
+
+Check if any repos were created in the org during the exposure window (fallback exfil):
 ```bash
 gh api --paginate "/orgs/$ORG/repos?per_page=100&sort=created&direction=desc" \
   --jq '.[] | select(.created_at > "2026-03-31T00:00:00Z" and .created_at < "2026-03-31T05:00:00Z") | "\(.name) | \(.created_at) | \(.visibility)"'
@@ -351,7 +561,7 @@ gh api --paginate "/orgs/$ORG/repos?per_page=100&sort=created&direction=desc" \
 
 ---
 
-## Phase 4: Present Results
+## Phase 5: Present Results
 
 Produce three deliverables and return them to the user:
 
@@ -377,6 +587,9 @@ Short prose summary for incident response leads. Include:
   manifest ranges include 1.14.1 or 0.30.4
 - **CI analysis**: how many runs used `npm ci` (lock-safe) vs `npm install`
   (can upgrade), what axios versions were actually installed, any IOCs found
+- **Network**: whether C2 domain/IP was found in firewall/proxy/DNS logs
+- **Workstations**: whether RAT artifacts or compromised packages were found
+  on developer machines
 - **Bottom line**: one sentence
 
 ### 4. Determine which repos need action
@@ -401,18 +614,22 @@ executive summary to the user.
 
 ---
 
-## Phase 5: Hardening & Remediation (User Approval Required)
+## Phase 6: Hardening & Remediation (User Approval Required)
 
 **Do NOT proceed without explicit user approval.** Present findings first, then ask.
 
-### If compromised (any `ci_compromised` = compromised):
+### If compromised (any `ci_compromised` = compromised, network IOCs found, or RAT artifacts found):
 
-1. **Rotate all secrets** accessible to affected workflows — npm tokens, AWS keys,
-   SSH keys, Docker registry creds, API keys, signing keys
-2. **Check for RAT artifacts** on CI runners and any machines that ran npm install
-   during the window (see Phase 3)
-3. **Rebuild Docker images** built during the window with `--no-cache`
-4. **Audit GitHub logs** for unauthorized commits, PRs, or releases during the window
+1. **Rotate all secrets** accessible to affected workflows and compromised machines —
+   npm tokens, AWS keys, SSH keys, Docker registry creds, API keys, signing keys
+2. **Remove RAT artifacts** from compromised machines (see Phase 4 for paths per OS)
+3. **Clean npm cache** on compromised machines: `npm cache clean --force`
+4. **Rebuild Docker images** built during the window with `--no-cache`
+5. **Block C2 at network level**: add `sfrclak.com` and `142.11.206.73` to
+   firewall/proxy deny lists
+6. **Audit GitHub logs** for unauthorized commits, PRs, or releases during the window
+7. **Re-image compromised workstations** if RAT was found — in-place cleaning
+   may miss persistence mechanisms
 
 ### Hardening (for repos where `can_be_compromised` = yes):
 
