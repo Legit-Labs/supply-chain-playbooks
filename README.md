@@ -29,6 +29,47 @@ Each playbook produces:
 
 ## Compromises
 
+### Miasma — npm worm via "Phantom Gyp" (June 3, 2026)
+
+A self-replicating npm worm, "Miasma", compromised 57 npm packages across 286+
+malicious versions in a sub-two-hour burst. It executes during `npm install`
+through a malicious `binding.gyp` (the "Phantom Gyp" technique) — `node-gyp rebuild`
+runs the payload with **no `package.json` lifecycle script**, so `--ignore-scripts`
+does not stop it. The payload downloads the Bun runtime, steals GitHub tokens
+(`gh auth token`), escalates via `sudo`, scrapes secrets from the Actions
+`Runner.Worker` process memory (`/proc/<pid>/mem`), and exfiltrates to attacker
+GitHub repos — then republishes the victim's own packages (self-propagation).
+
+- [Playbook](miasma_supply_chain/playbook.md) — repo analysis, CI log scan for the gyp/Bun/`/proc/mem` chain, forward-propagation check on the customer's own packages, workstation forensics, and hardening
+
+---
+
+### Sicoob.Sdk — malicious NuGet banking-credential stealer (May 2026)
+
+A malicious NuGet package `Sicoob.Sdk` (v2.0.0–2.0.4) masqueraded as the official
+C# SDK for the Brazilian bank Sicoob. At **application runtime** — when
+`SicoobClient` is instantiated — it Base64-encodes the PFX certificate and
+exfiltrates it, the PFX password, and the client ID to a hardcoded Sentry endpoint,
+plus captures Boleto API data. The same actor (`vpmdhaj`) concurrently shipped ~14
+npm typosquats with `preinstall` hooks stealing AWS/Vault/npm/CI credentials.
+
+- [Playbook](sicoob_sdk/playbook.md) — NuGet + npm reference discovery, runtime-usage (`SicoobClient`) detection, deployed-artifact/container checks, Sentry-exfil network hunt, PFX/credential rotation, and hardening
+
+---
+
+### TanStack / Mini Shai-Hulud — npm worm wave (May 11, 2026)
+
+A self-propagating npm worm (TeamPCP / Mini Shai-Hulud) that started with
+`@tanstack/*` and spread to 19+ npm scopes — ~373 malicious package-versions across
+~169 package names. The initial vector poisoned the GitHub Actions cache via a
+`pull_request_target` workflow, dumped runner process memory for an OIDC token, and
+published malicious tarballs carrying valid SLSA provenance. Installs persistence
+(`gh-token-monitor`) and tampers with `.claude/` / `.vscode/` agent configs.
+
+- [Playbook](tanstack_supply_chain/playbook.md) — multi-scope repo analysis, CI log scan, forward-propagation check, network/workstation forensics, and hardening. Also covers later Mini Shai-Hulud waves (e.g. the AntV compromise) — same procedure with updated package names and IOCs.
+
+---
+
 ### Axios (March 31, 2026)
 
 Two compromised versions of the `axios` npm package (v1.14.1 and v0.30.4) were
