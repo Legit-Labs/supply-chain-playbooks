@@ -57,6 +57,21 @@ npm typosquats with `preinstall` hooks stealing AWS/Vault/npm/CI credentials.
 
 ---
 
+### AntV / Mini Shai-Hulud — npm worm wave (May 19, 2026)
+
+A later TeamPCP "Mini Shai-Hulud" wave that compromised the `@antv` ecosystem (114
+packages / 228+ malicious versions) plus `@lint-md/*`, `@openclaw-cn/*`,
+`echarts-for-react`, `timeago.js`, `size-sensor`, and `canvas-nest.js` via
+compromised maintainer accounts — 600+ malicious versions campaign-wide (317
+packages in ~22 minutes). The stealer harvests 20+ credential types, attempts Docker
+container escape via the host socket, backdoors `.vscode/tasks.json` and
+`.claude/settings.json`, self-propagates through stolen npm tokens (`preinstall` →
+`bun run index.js`), and forges Sigstore/SLSA provenance. New C2: `t.m-kosche[.]com`.
+
+- [Playbook](antv_supply_chain/playbook.md) — repo analysis, CI log scan, forward-propagation check, network (`t.m-kosche.com`) + workstation forensics (`.vscode`/`.claude` backdoors, Docker socket), and hardening
+
+---
+
 ### TanStack / Mini Shai-Hulud — npm worm wave (May 11, 2026)
 
 A self-propagating npm worm (TeamPCP / Mini Shai-Hulud) that started with
@@ -66,7 +81,7 @@ A self-propagating npm worm (TeamPCP / Mini Shai-Hulud) that started with
 published malicious tarballs carrying valid SLSA provenance. Installs persistence
 (`gh-token-monitor`) and tampers with `.claude/` / `.vscode/` agent configs.
 
-- [Playbook](tanstack_supply_chain/playbook.md) — multi-scope repo analysis, CI log scan, forward-propagation check, network/workstation forensics, and hardening. Also covers later Mini Shai-Hulud waves (e.g. the AntV compromise) — same procedure with updated package names and IOCs.
+- [Playbook](tanstack_supply_chain/playbook.md) — multi-scope repo analysis, CI log scan, forward-propagation check, network/workstation forensics, and hardening. Part of the same TeamPCP Mini Shai-Hulud series as the [AntV wave](antv_supply_chain/playbook.md) (May 19) — distinct package set and a different C2.
 
 ---
 
