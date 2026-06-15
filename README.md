@@ -85,6 +85,21 @@ published malicious tarballs carrying valid SLSA provenance. Installs persistenc
 
 ---
 
+### SAP CAP / Mini Shai-Hulud — npm wave (April 29, 2026)
+
+An earlier TeamPCP "Mini Shai-Hulud" wave that backdoored four SAP npm packages
+(`@cap-js/sqlite@2.2.2`, `@cap-js/postgres@2.2.2`, `@cap-js/db-service@2.10.1`,
+`mbt@1.2.48`; ~1.2M monthly installs, enterprise SAP CI/CD). A `preinstall` hook
+downloads the Bun runtime and runs an ~11.7 MB obfuscated stealer (`execution.js`)
+harvesting GitHub/npm/cloud/Kubernetes/CI credentials (incl. from runner memory),
+exfiltrating AES-256-GCM-encrypted to attacker GitHub repos ("A Mini Shai-Hulud has
+Appeared"), with `.vscode/tasks.json` persistence and a Russian-locale guardrail.
+Root cause: a compromised SAP dev account + over-broad npm OIDC trusted publishing.
+
+- [Playbook](sap_supply_chain/playbook.md) — repo analysis across npm/pnpm/yarn, CI log scan, forward-propagation, network + workstation forensics, and hardening (incl. scoping npm OIDC trusted publishing). Functionally tested (29/29).
+
+---
+
 ### Axios (March 31, 2026)
 
 Two compromised versions of the `axios` npm package (v1.14.1 and v0.30.4) were
