@@ -44,19 +44,6 @@ GitHub repos — then republishes the victim's own packages (self-propagation).
 
 ---
 
-### Sicoob.Sdk — malicious NuGet banking-credential stealer (May 2026)
-
-A malicious NuGet package `Sicoob.Sdk` (v2.0.0–2.0.4) masqueraded as the official
-C# SDK for the Brazilian bank Sicoob. At **application runtime** — when
-`SicoobClient` is instantiated — it Base64-encodes the PFX certificate and
-exfiltrates it, the PFX password, and the client ID to a hardcoded Sentry endpoint,
-plus captures Boleto API data. The same actor (`vpmdhaj`) concurrently shipped ~14
-npm typosquats with `preinstall` hooks stealing AWS/Vault/npm/CI credentials.
-
-- [Playbook](sicoob_sdk/playbook.md) — NuGet + npm reference discovery, runtime-usage (`SicoobClient`) detection, deployed-artifact/container checks, Sentry-exfil network hunt, PFX/credential rotation, and hardening
-
----
-
 ### AntV / Mini Shai-Hulud — npm worm wave (May 19, 2026)
 
 A later TeamPCP "Mini Shai-Hulud" wave that compromised the `@antv` ecosystem (114
