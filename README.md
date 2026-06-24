@@ -29,6 +29,26 @@ Each playbook produces:
 
 ## Compromises
 
+### PostCSS Typosquat → Windows RAT (June 22, 2026)
+
+Three malicious npm packages published by the npm user `abdrizak` —
+`postcss-minify-selector-parser`, `postcss-minify-selector`, and
+`aes-decode-runner-pro` — impersonate the popular `postcss-selector-parser`
+library (150M+ weekly downloads). Every published version is attacker-authored
+malware. The payload fires when the package is **imported** (not via `postinstall`,
+so `--ignore-scripts` does not help): an AES-256-GCM-decoded JavaScript dropper
+writes and runs a PowerShell script that downloads a Windows bundle from
+`nvidiadriver[.]net`, which launches a Nuitka-compiled Python RAT. The RAT steals
+Chrome credentials (bypassing app-bound encryption), opens a remote shell, and
+persists via a registry Run key (`csshost`) that survives package uninstall.
+Windows-only payload. Discovered by JFrog Security Research; npm removed all three
+packages on June 24, 2026.
+
+- [Playbook](postcss_supply_chain/playbook.md) — org-wide reference scan, CI log analysis scoped to Windows runners, network IOC checks, evidence tables, and remediation
+- [Workstation Playbook](postcss_supply_chain/workstation-playbook.md) — Windows host forensics: RAT artifacts + `.pyd` hash matching, registry persistence, npm cache / lock-file scan, network indicators, Chrome credential-theft exposure, AI-agent conversation logs
+
+---
+
 ### Miasma — npm worm via "Phantom Gyp" (June 3, 2026)
 
 A self-replicating npm worm, "Miasma", compromised 57 npm packages across 286+
