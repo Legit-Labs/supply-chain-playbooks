@@ -29,6 +29,25 @@ Each playbook produces:
 
 ## Compromises
 
+### codfish/semantic-release-action — poisoned GitHub Action tags (June 24, 2026)
+
+A TeamPCP/Miasma operator with push access to `codfish/semantic-release-action` (the
+original semantic-release GitHub Action, used since 2019) force-pushed a malicious
+commit and repointed sixteen version tags (`v2`–`v5`, including the floating majors)
+to it. The action was converted to a composite action that runs the legitimate step
+for cover, installs Bun, and executes the Miasma worm `index.js` inside the runner —
+so any workflow referencing a poisoned tag runs the payload on its **next CI run**.
+It steals `GITHUB_TOKEN`/OIDC/PATs/`NPM_TOKEN`/AI-tool keys, uses GitHub commit-search
+as dead-drop C2 (markers `RevokeAndItGoesKaboom`, `TheBeautifulSandsOfTime`), hijacks
+13 AI-assistant configs, and propagates over SSH and via `chore: update dependencies`
++ `skip-checks:true` commits. The fix is structural: pin `uses:` to a pre-compromise
+commit SHA, not a tag.
+
+- [Detection](codfish_semantic_release_action/detection.md) — find & classify every `uses:` reference (tag vs SHA), scan CI logs from the exposure window for the poisoned step actually executing, and hunt the worm's org-side + workstation footprint
+- [Hardening](codfish_semantic_release_action/hardening.md) — rotate-first remediation, pin all actions to immutable SHAs (ratchet), least-privilege `GITHUB_TOKEN` + egress control, worm-footprint cleanup
+
+---
+
 ### Miasma — npm worm via "Phantom Gyp" (June 3, 2026)
 
 A self-replicating npm worm, "Miasma", compromised 57 npm packages across 286+
