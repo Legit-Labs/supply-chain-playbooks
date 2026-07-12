@@ -29,6 +29,25 @@ Each playbook produces:
 
 ## Compromises
 
+### Gitea Docker Image Auth Bypass — CVE-2026-20896 (June 2026)
+
+The official Gitea Docker image ships an `app.ini` template hard-coding
+`REVERSE_PROXY_TRUSTED_PROXIES = *` (safe upstream default is
+`127.0.0.0/8,::1/128`). With reverse-proxy authentication enabled, that wildcard
+makes Gitea trust the `X-WEBAUTH-USER` header from any source IP — so an
+unauthenticated attacker who can reach the HTTP port directly can impersonate any
+user, including an admin, with a single header (`curl -H "X-WEBAUTH-USER: admin"`).
+CVSS 9.8 (GHSA-f75j-4cw6-rmx4). Affects the Docker image ≤ 1.26.2; fixed in 1.26.3
+(which shipped a repo-code-page regression) — upgrade straight to 1.26.4. Unlike an
+install-time compromise, this is a **vulnerable configuration state**: no exposure
+window, an affected instance is exploitable now. ~6,200 instances were
+internet-exposed; in-the-wild probing was observed ~13 days after disclosure from a
+ProtonVPN exit node (`159.26.98.241`).
+
+- [Playbook](gitea/playbook.md) — org-wide discovery of Gitea deployments, version + config vulnerable-state check (image tag, `REVERSE_PROXY_TRUSTED_PROXIES`, `ENABLE_REVERSE_PROXY_AUTHENTICATION`), log review for header abuse, and remediation/hardening
+
+---
+
 ### codfish/semantic-release-action — poisoned GitHub Action tags (June 24, 2026)
 
 A TeamPCP/Miasma operator with push access to `codfish/semantic-release-action` (the
