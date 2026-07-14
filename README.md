@@ -29,6 +29,23 @@ Each playbook produces:
 
 ## Compromises
 
+### Jscrambler — npm infostealer via compromised publish creds (July 11, 2026)
+
+An attacker with compromised npm publishing credentials pushed four malicious
+`jscrambler` versions (`8.14.0`, `8.16.0`, `8.17.0`, `8.20.0`) of the popular
+JavaScript-protection tool (~17k weekly downloads). Each runs a cross-platform
+infostealer in the **`preinstall`** hook (native Rust build for Win/WSL, macOS,
+Linux; plus a Node.js stealer variant with a WebSocket reverse shell), harvesting
+source code, Git/SSH keys, CI/CD tokens, cloud creds (AWS/Azure/GCP/K8s), AI-tool
+configs, and crypto wallets, then exfiltrating over TLS to `216.126.225.243`
+(ports 8085/8086/8087). Live ~3h on 2026-07-11, ~1,479 downloads; fixed in
+`8.22.0`. No CVE assigned. Detected by Socket.
+
+- [Playbook](jscrambler/playbook.md) — org-wide reference scan, CI log analysis scoped to the exposure window (malicious versions + `preinstall` execution + C2), network IOC checks, evidence tables, and hardening
+- [Workstation Playbook](jscrambler/workstation-playbook.md) — dev-host forensics: npm/pnpm/yarn cache + lockfile scan for malicious versions, `node_modules` version + `preinstall` check, C2 network indicators, targeted credential-store review + rotation, AI-agent conversation logs
+
+---
+
 ### Gitea Docker Image Auth Bypass — CVE-2026-20896 (June 2026)
 
 The official Gitea Docker image ships an `app.ini` template hard-coding
