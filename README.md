@@ -29,6 +29,26 @@ Each playbook produces:
 
 ## Compromises
 
+### AsyncAPI npm org — OIDC trusted-publisher hijack → Miasma loader (July 14, 2026)
+
+An attacker abused a misconfigured `pull_request_target` workflow in `asyncapi/generator`
+(it checked out and ran PR-head code with secrets in scope) to steal the npm publish token,
+then let the projects' own OIDC trusted-publisher release pipelines publish **five malicious
+versions across four `@asyncapi` packages** (`@asyncapi/specs` 6.11.2 + 6.11.2-alpha.1,
+`@asyncapi/generator` 3.3.1, `@asyncapi/generator-components` 0.7.1, `@asyncapi/generator-helpers` 1.1.1)
+— each with **valid provenance built from unauthorized commits**. The injected loader runs at
+**import/`require()` time** (so `--ignore-scripts` does not help), pulls an encrypted `sync.js`
+from IPFS, and runs the **Miasma** botnet (multi-channel C2, OS persistence, credential theft,
+dead-man's-switch). `@asyncapi/specs` (~2.25M weekly downloads) is a transitive dep of much of
+the AsyncAPI tooling ecosystem — most exposure is indirect. Distinct from the June 3 "Phantom Gyp"
+Miasma worm ([miasma_supply_chain/](miasma_supply_chain/playbook.md)): different delivery, trigger,
+package set, and C2.
+
+- [Playbook](asyncapi_supply_chain/playbook.md) — repo analysis, CI log scan for import-time runtime egress (IPFS CIDs / HTTP C2 / `rentry.co`), own-org `pull_request_target` audit, deployed-artifact & network checks, and hardening
+- [Workstation Playbook](asyncapi_supply_chain/workstation-playbook.md) — dev-machine/runner forensics: `sync.js` drop paths, `miasma-monitor` persistence, npm cache by injected-file hash, network indicators, AI-agent conversation scanning
+
+---
+
 ### Gitea Docker Image Auth Bypass — CVE-2026-20896 (June 2026)
 
 The official Gitea Docker image ships an `app.ini` template hard-coding
