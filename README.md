@@ -29,6 +29,29 @@ Each playbook produces:
 
 ## Compromises
 
+### SleeperGem RubyGems — dormant-maintainer backdoor targeting developer machines (July 18, 2026)
+
+Three malicious gems published to RubyGems from **long-dormant maintainer accounts
+reactivated within hours of each other** (`LR-DEV`, `pinkroom`) — a "sleeper"
+tradecraft where an account quiet for six or seven years slips past reputation
+checks. `git_credential_manager` (2.8.0–2.8.3, namesquats Microsoft's Git
+Credential Manager), `Dendreo` (1.1.3/1.1.4), and
+`fastlane-plugin-run_tests_firebase_testlab` (0.3.2) each ship an **install-time
+loader** that fetches a second stage from an attacker Forgejo host
+(`git.disroot[.]org/git-ecosystem`), drops a native daemon impersonating Git
+Credential Manager (`~/.local/share/gcm/`), installs OS persistence (cron +
+systemd user service + a setuid-root shell at `/usr/local/sbin/ping6`), escalates
+to root via passwordless `sudo`, and steals credentials. **The loader deliberately
+evades CI/CD** — it scans ~30 build-system env vars and exits on any runner,
+targeting developer laptops instead. Secondary gems `slackHtmlToMarkdown`,
+`seo_optimizer`, `array_fast_methods` declared the malicious `git_credential_manager`
+as a transitive dependency. All malicious versions have been yanked.
+
+- [Playbook](sleepergem_supply_chain/playbook.md) — org-wide `Gemfile`/`Gemfile.lock` asset discovery, why CI logs are NOT the evidence surface here, and per-machine remediation/hardening
+- [Workstation Playbook](sleepergem_supply_chain/workstation-playbook.md) — the primary surface: daemon (`~/.local/share/gcm/`), setuid shell (`/usr/local/sbin/ping6`), cron/systemd persistence, RubyGems/Bundler cache, `git.disroot.org` egress, shell history, AI-agent conversation scanning
+
+---
+
 ### AsyncAPI npm org — OIDC trusted-publisher hijack → Miasma loader (July 14, 2026)
 
 An attacker abused a misconfigured `pull_request_target` workflow in `asyncapi/generator`
