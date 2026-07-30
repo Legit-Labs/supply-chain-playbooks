@@ -29,6 +29,31 @@ Each playbook produces:
 
 ## Compromises
 
+### joyfill npm — import-time DEV#POPPER RAT with blockchain-resolved C2 (July 28, 2026)
+
+Six malicious prerelease versions were published across two `@joyfill` npm packages
+(`@joyfill/layouts` 0.1.2-2773.beta.0/1/2 and `@joyfill/components`
+4.0.0-rc24-2773-beta.4/5/6, ~20,000 weekly downloads each). The implant was appended
+to the packages' **built `dist/` bundles** and — unlike a lifecycle-hook compromise —
+**executes when Node.js loads the entrypoint**, so `npm install --ignore-scripts`
+provides no protection and install logs alone are not evidence. The loader resolves its
+C2 address from **public Tron, Aptos and BNB Smart Chain transactions**, pulls a 77 KB
+Socket.IO **remote access trojan of the DEV#POPPER family** (`ss_*` command set,
+`Sec-V: A9-0135-3` header, `/$/boot` path), then stages a Python credential stealer that
+exfiltrates npm/Git tokens, SSH keys, OS keychains and browser secrets to `/u/f`.
+Persistence is injected into **developer tooling that survives `rm -rf node_modules`** —
+`@vscode/deviceid` (VS Code, Cursor, Antigravity), Discord Desktop, GitHub Desktop, and
+the **global npm CLI**, which re-executes the malware on every subsequent `npm` command.
+Attributed to the **PolinRider** cluster (assessed related to North Korea-linked
+Contagious Interview activity). **Four of the six versions have since been removed from
+npm, but both `@joyfill/layouts` prereleases remain installable (status as of 30 July
+2026) — and removal is not remediation: a pulled version still lives in committed lock
+files, package-manager caches, and already-built images.**
+
+- [Playbook](joyfill_supply_chain/playbook.md) — org-wide manifest/lock-file discovery, CI run analysis for *import-time* detonation (install evidence **plus** execution evidence, and cache-restore bypass), container-layer forensics, C2/blockchain egress hunting, inline developer-workstation checks, and persistence-first remediation
+
+---
+
 ### SleeperGem RubyGems — dormant-maintainer backdoor targeting developer machines (July 18, 2026)
 
 Three malicious gems published to RubyGems from **long-dormant maintainer accounts
