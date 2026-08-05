@@ -29,6 +29,32 @@ Each playbook produces:
 
 ## Compromises
 
+### keyv / cacheable npm — Shai-Hulud worm with Ethereum-resolved C2 and Actions secret theft (August 4, 2026)
+
+A compromised maintainer account behind **`keyv` and the `cacheable` family** published
+trojanized patch releases carrying a `preinstall: node setup.mjs` hook, which downloads
+**Bun 1.3.13** and runs a ~710 KB obfuscated payload (`math_init.js`). The worm spread to
+**400+ packages across 1,300+ versions** with **2+ billion combined monthly installs** —
+`flat-cache` and `file-entry-cache` sit **underneath ESLint**, so most repos are exposed
+transitively. It harvests npm/GitHub/AWS/Azure/GCP/Kubernetes/Vault/SSH/AI-service
+credentials, **scrapes `Runner.Worker` process memory on Linux Actions runners**, and
+resolves its C2 domain list from **Ethereum mainnet contract
+`0xE1f2395ee43e45A1556EC6438a88c31B83493103`** (fallback `npm-cache[.]com`), with C2
+responses `eval()`d for full RCE. Three capabilities are new to this wave: it commits
+five files (`.claude/`, `.vscode/`) to **up to 50 branches per repo** so that
+**opening the repo in VS Code or starting a Claude Code session detonates the payload
+with no npm install at all**; it steals **GitHub Actions secrets** via an injected
+`codeql_analysis.yml` that serializes `${{ toJSON(secrets) }}`, then **deletes the
+workflow and branch**; and it abuses **npm OIDC trusted publishing** to mint genuine
+Sigstore provenance on malicious artifacts. **All malicious versions have since been
+unpublished — which is not remediation:** they persist in committed lock files,
+package-manager caches, and already-built images.
+
+- [Playbook](keyv_cacheable_supply_chain/playbook.md) — org-wide manifest/lock discovery, ESLint transitive reach, **all-branch infection scan**, CI log analysis, **Actions secret-harvesting forensics via audit log and artifacts (the code self-deletes)**, forward-propagation check, network hunting, and rotation-first remediation
+- [Workstation Playbook](keyv_cacheable_supply_chain/workstation-playbook.md) — the editor/agent backdoor surface first (`.claude/settings.json` `SessionStart` hook, `.vscode/tasks.json` `Environment Setup` task), payload hashes, npm cache, credential exposure inventory, AI-agent conversation scanning
+
+---
+
 ### joyfill npm — import-time DEV#POPPER RAT with blockchain-resolved C2 (July 28, 2026)
 
 Six malicious prerelease versions were published across two `@joyfill` npm packages
