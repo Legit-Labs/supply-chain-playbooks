@@ -29,6 +29,14 @@ Each playbook produces:
 
 ## Compromises
 
+### CopyEscape — `docker cp` destination escape, CVE-2026-17106 (August 2026)
+
+A path-traversal flaw in **`github.com/moby/go-archive`** (`< 0.3.0`), reached through Docker's `docker cp` copy-out path. A malicious container wins a race while the daemon builds the tar, swapping a directory for an absolute symlink; the resulting archive's child entries are written **through** that symlink, outside the destination, with the permissions of whoever ran the copy. The published PoC replaces `/usr/bin/runc` for root code execution. Fixed in Docker Engine/CLI **29.7.0** (install **29.7.2** — .1/.2 repair regressions the fix introduced), Docker Desktop **4.86.0**, Docker Sandboxes **0.38.0**. Reported privately to Docker by the **Imperva Red Team** on 2026-04-11. **No IOCs exist** — the attacker chooses both the bytes and the paths — so detection is version state plus local tamper evidence. Note the ordering: a working PoC was already public on **2026-06-24**, sixteen days before the 90-day disclosure deadline elapsed and over five weeks before any patch, while the GHSA did not reach the global advisory database until 2026-08-18 — so a clean SCA report predating that is not evidence of safety.
+
+- [Playbook](docker_cp_copyescape/playbook.md) — org-wide discovery of dind/CLI image pins and `docker cp` copy-out sites, host/runner version determination (including the digest-vs-tag trap), a dedicated phase for triaging the `// indirect` `go.mod` false positives, package-verification tamper checks on `runc`/Docker binaries, and upgrade + rebuild remediation
+
+---
+
 ### SleeperGem RubyGems — dormant-maintainer backdoor targeting developer machines (July 18, 2026)
 
 Three malicious gems published to RubyGems from **long-dormant maintainer accounts
