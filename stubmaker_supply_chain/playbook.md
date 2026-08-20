@@ -32,7 +32,7 @@ credential and cryptocurrency stealer.
 On **15 August 2026**, OpenSourceMalware discovered malicious gems on RubyGems and
 named the campaign **StubMaker**. It grew to **16 gems across three attacker accounts**
 within a day. OpenSourceMalware later connected a wave of **37 typosquatted npm
-packages** (16 August, also reported by SafeDep and OpenHack) to the same actor —
+packages** (16 August) to the same actor —
 same payload, same C2.
 
 ### The "StubMaker" signature

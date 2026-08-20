@@ -33,7 +33,7 @@ Each playbook produces:
 
 A cross-ecosystem typosquatting campaign named **StubMaker** by OpenSourceMalware: **16 malicious
 gems across three attacker accounts** (from 15 Aug) and **37 malicious npm packages** (16 Aug, also
-reported by SafeDep and OpenHack) sharing one payload and one C2. The gems abuse `extconf.rb`, the
+connected by OpenSourceMalware) sharing one payload and one C2. The gems abuse `extconf.rb`, the
 native-extension hook, and the name comes from what it writes there: a `Makefile` with empty
 `all`/`install`/`clean` targets plus the no-op compiler stand-ins **`make_stub`** and
 **`make_stub.bat`**, so the build reports a clean compile with no compiler output while the hook
