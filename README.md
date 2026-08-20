@@ -37,6 +37,42 @@ A path-traversal flaw in **`github.com/moby/go-archive`** (`< 0.3.0`), reached t
 
 ---
 
+### StubMaker — typosquatted RubyGems + npm packages dropping a Windows infostealer (August 15–16, 2026)
+
+A cross-ecosystem typosquatting campaign named **StubMaker** by OpenSourceMalware: **16 malicious
+gems across three attacker accounts** (from 15 Aug) and **37 malicious npm packages** (16 Aug, also
+connected by OpenSourceMalware) sharing one payload and one C2. The gems abuse `extconf.rb`, the
+native-extension hook, and the name comes from what it writes there: a `Makefile` with empty
+`all`/`install`/`clean` targets plus the no-op compiler stand-ins **`make_stub`** and
+**`make_stub.bat`**, so the build reports a clean compile with no compiler output while the hook
+fetches a 22 MB Rust loader from `github[.]com/bebraz1/qPzM50V1AKG0rVlH` and saves it as
+**`main.exe` in the user's `Downloads` folder**. That loader decrypts an **11 MB Go stealer
+(`wincfg`)** from its own data section, which in turn carries **`abe_payload.dll`** to defeat
+Chromium **App-Bound Encryption** — taking browser passwords and cookies, payment cards and CVCs,
+crypto wallets and BIP-39 seed phrases, and Telegram `tdata`. Exfiltration is a password-protected
+ZIP to Gofile, with the link POSTed to **`dresslee[.]com:20027`** over plaintext HTTP.
+
+Four things shape the investigation. **It is a typosquat, not a hijack** — no legitimate package was
+compromised, so there is no transitive exposure and any hit is actionable on its own. **Every OS
+beacons; only Windows gets the payload** — the installer POSTs the detected platform to
+`193.70.34.101:20099/vote` on Windows, macOS *and* Linux, so a Mac that installed one left exactly
+one artifact and **network logs are the only place it appears**. **There is no second-stage download
+to catch** — everything after the single `main.exe` fetch is embedded and decrypted in memory, so
+detection keyed on "payload fetches more payload" never fires. And **RubyGems namespace reclaim
+defeated the first takedown**: `brumdler` and `brundlef` came from `gemlewqqhu1`, and once all
+versions were yanked the namespace reopened for anyone to claim — `mod8rz41mje` reclaimed `brumdler`
+and `rbq95bwt6q` took `brundlef`, so the gems are indicated **by name, not by version**. The npm side
+is version-precise by contrast: all 37 at **`1.0.0`** only, in a **1h45m window (2026-08-16
+02:28–04:13 UTC)** verified against the registry packuments. Downloads were low — 56–339 per gem,
+~1,222 total. **Persistence is explicitly confirmed absent**, so a clean artifact scan does not clear
+a host. As of 2026-08-19 the GitHub loader release is **404**, but **both C2 endpoints still answer**
+— probe the documented ports (20099 / 20027), not 80/443.
+
+- [Playbook](stubmaker_supply_chain/playbook.md) — repo analysis across all 53 names (with a manifest-type probe that cut a real 72-repo sweep from 180 to 106 queries), a Windows-runner pre-filter that bounds the CI question up front, CI run analysis against both windows, **a network phase that is the only way to reach non-Windows hosts**, impact assessment, and an audit for attacker-created persistence that outlives credential rotation
+- [Workstation Playbook](stubmaker_supply_chain/workstation-playbook.md) — per-OS host forensics in bash **and PowerShell** with SHA-256 matching: `Downloads\main.exe` and `abe_payload.dll` on Windows, the `make_stub` artifacts on every platform, package-manager cache as proof the install ran, beacon/exfil egress, and AI-agent conversation logs with self-pollution exclusion
+
+---
+
 ### keyv / cacheable npm — Shai-Hulud worm with Ethereum-resolved C2 and Actions secret theft (August 4, 2026)
 
 A compromised maintainer account behind **`keyv` and the `cacheable` family** published
