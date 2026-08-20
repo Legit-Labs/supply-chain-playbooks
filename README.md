@@ -37,6 +37,57 @@ A path-traversal flaw in **`github.com/moby/go-archive`** (`< 0.3.0`), reached t
 
 ---
 
+### keyv / cacheable npm — Shai-Hulud worm with Ethereum-resolved C2 and Actions secret theft (August 4, 2026)
+
+A compromised maintainer account behind **`keyv` and the `cacheable` family** published
+trojanized patch releases carrying a `preinstall: node setup.mjs` hook, which downloads
+**Bun 1.3.13** and runs a ~710 KB obfuscated payload (`math_init.js`). The worm spread to
+**400+ packages across 1,300+ versions** with **2+ billion combined monthly installs** —
+`flat-cache` and `file-entry-cache` sit **underneath ESLint**, so most repos are exposed
+transitively. It harvests npm/GitHub/AWS/Azure/GCP/Kubernetes/Vault/SSH/AI-service
+credentials, **scrapes `Runner.Worker` process memory on Linux Actions runners**, and
+resolves its C2 domain list from **Ethereum mainnet contract
+`0xE1f2395ee43e45A1556EC6438a88c31B83493103`** (fallback `npm-cache[.]com`), with C2
+responses `eval()`d for full RCE. Three capabilities are new to this wave: it commits
+five files (`.claude/`, `.vscode/`) to **up to 50 branches per repo** so that
+**opening the repo in VS Code or starting a Claude Code session detonates the payload
+with no npm install at all**; it steals **GitHub Actions secrets** via an injected
+`codeql_analysis.yml` that serializes `${{ toJSON(secrets) }}`, then **deletes the
+workflow and branch**; and it abuses **npm OIDC trusted publishing** to mint genuine
+Sigstore provenance on malicious artifacts. **All malicious versions have since been
+unpublished — which is not remediation:** they persist in committed lock files,
+package-manager caches, and already-built images.
+
+- [Playbook](keyv_cacheable_supply_chain/playbook.md) — org-wide manifest/lock discovery, ESLint transitive reach, **all-branch infection scan**, CI log analysis, **Actions secret-harvesting forensics via audit log and artifacts (the code self-deletes)**, forward-propagation check, network hunting, and rotation-first remediation
+- [Workstation Playbook](keyv_cacheable_supply_chain/workstation-playbook.md) — the editor/agent backdoor surface first (`.claude/settings.json` `SessionStart` hook, `.vscode/tasks.json` `Environment Setup` task), payload hashes, npm cache, credential exposure inventory, AI-agent conversation scanning
+
+---
+
+### joyfill npm — import-time DEV#POPPER RAT with blockchain-resolved C2 (July 28, 2026)
+
+Six malicious prerelease versions were published across two `@joyfill` npm packages
+(`@joyfill/layouts` 0.1.2-2773.beta.0/1/2 and `@joyfill/components`
+4.0.0-rc24-2773-beta.4/5/6, ~20,000 weekly downloads each). The implant was appended
+to the packages' **built `dist/` bundles** and — unlike a lifecycle-hook compromise —
+**executes when Node.js loads the entrypoint**, so `npm install --ignore-scripts`
+provides no protection and install logs alone are not evidence. The loader resolves its
+C2 address from **public Tron, Aptos and BNB Smart Chain transactions**, pulls a 77 KB
+Socket.IO **remote access trojan of the DEV#POPPER family** (`ss_*` command set,
+`Sec-V: A9-0135-3` header, `/$/boot` path), then stages a Python credential stealer that
+exfiltrates npm/Git tokens, SSH keys, OS keychains and browser secrets to `/u/f`.
+Persistence is injected into **developer tooling that survives `rm -rf node_modules`** —
+`@vscode/deviceid` (VS Code, Cursor, Antigravity), Discord Desktop, GitHub Desktop, and
+the **global npm CLI**, which re-executes the malware on every subsequent `npm` command.
+Attributed to the **PolinRider** cluster (assessed related to North Korea-linked
+Contagious Interview activity). **Four of the six versions have since been removed from
+npm, but both `@joyfill/layouts` prereleases remain installable (status as of 30 July
+2026) — and removal is not remediation: a pulled version still lives in committed lock
+files, package-manager caches, and already-built images.**
+
+- [Playbook](joyfill_supply_chain/playbook.md) — org-wide manifest/lock-file discovery, CI run analysis for *import-time* detonation (install evidence **plus** execution evidence, and cache-restore bypass), container-layer forensics, C2/blockchain egress hunting, inline developer-workstation checks, and persistence-first remediation
+
+---
+
 ### SleeperGem RubyGems — dormant-maintainer backdoor targeting developer machines (July 18, 2026)
 
 Three malicious gems published to RubyGems from **long-dormant maintainer accounts
