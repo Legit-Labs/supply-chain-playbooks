@@ -305,6 +305,8 @@ Any Ethereum RPC resolution from a machine that does not do Web3 development is 
 
 The loader spawns a **detached** `node -e` that outlives the install.
 
+> **This is the check that covers the editor path, so do not skip it on a machine that "never built anything."** Execution is at import, and Tailwind IntelliSense, PostCSS language support and ESLint/Prettier daemons load `tailwind.config.js` / `postcss.config.js`, which `require()` their plugins — so simply **opening the project in an editor** can run the payload with no install, no build and no CI record. Same for dev servers and watchers (vite, webpack-dev-server, nodemon) and test runners (jest, vitest). Expect the parent PID to resolve to an editor, extension host or language server rather than a build process; that makes the hit *more* consistent with this campaign, not less.
+
 ```bash
 # Long-lived node processes running inline code
 ps aux | grep -E "node\s+-e" | grep -v grep

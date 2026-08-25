@@ -220,8 +220,11 @@ export W2_SINCE="2026-08-09T22:00:00Z"; export W2_UNTIL="2026-08-24T12:00:00Z"
 - CI runs and Docker builds that installed JS deps during a window, **including those using `--ignore-scripts`** (import-time trigger).
 - Builds that only **bundled or compiled** an affected package — bundlers import modules to resolve them.
 - Developer workstations that installed or ran any affected package.
+- **Editor and IDE tooling that merely opened the project — no install, no build, no test run.** Tailwind IntelliSense, PostCSS language support, and ESLint/Prettier daemons load `tailwind.config.js` and `postcss.config.js`, which `require()` their plugins. For the Tailwind/PostCSS typosquats this is plausibly the *most* common execution path. The same applies to long-running dev servers and watchers (vite, webpack-dev-server, nodemon) and to test runners (jest, vitest) that load the same config.
 - Container images built during a window — the payload is baked into the layer.
 - Your **own published packages**, if their lock files pin an affected version, or if a maintainer's credentials were stolen.
+
+> **⚠️ A clean CI-log scan does not clear the org.** The editor path produces no CI run, no install line and no build log — Phase 2 will be silent on it by construction. If Phase 1 finds an affected package in any manifest or lock file, treat every workstation that had that repo checked out during the window as in-scope regardless of what the CI scan says, and run [workstation-playbook.md](workstation-playbook.md) on it. The `node -e`-with-no-tty check there is the detection that covers this path; note that its parent will be an editor or language-server process rather than a build.
 
 ### What is NOT affected
 
