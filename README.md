@@ -29,6 +29,28 @@ Each playbook produces:
 
 ## Compromises
 
+### WordPress Core Unauthenticated LFI → RCE — CVE-2026-87902 (September 22, 2026)
+
+`get_page_template()` builds one of its candidate template filenames straight from
+the `pagename` URL segment and never runs it through WordPress's own `../`
+traversal check — so an unauthenticated request can include **any readable `.php`
+file on the server**. CVSS 4.0 **9.2**, CWE-98. Affects **4.7.0 through 7.1.1** —
+effectively every release since 2016 — and WordPress backported the fix to all 25
+eligible branches (`4.7.37` … `6.4.12` … `7.1.2`). Inclusion alone is always
+possible; escalation to **RCE** needs two preconditions: an active theme with a
+top-level `page-*` directory, and PHP `register_argc_argv=On` (the documented path
+includes PEAR's `pearcmd.php` and feeds it query-string parameters).
+⚠️ **`register_argc_argv` is on by default in the official PHP Docker images**, which
+makes containerised WordPress the *high-risk* population rather than the hardened
+one. Probing began **17:44 UTC on the day of the patch**. Like Gitea below this is a
+**vulnerable deployed state**, not an install-time compromise — and note that **no
+advisory carries package coordinates** (no GHSA, no OSV, Packagist reports zero), so
+SCA will not surface it.
+
+- [Playbook](wordpress_core_lfi_rce/playbook.md) — org-wide discovery of WordPress deployments (images, Helm, compose, and the Composer minority), version resolution from `wp-includes/version.php` rather than the image tag, both RCE preconditions plus `pearcmd.php` presence, traversal-pattern log review, and remediation/hardening
+
+---
+
 ### Shai-Hulud "Trinitite" — `@7nohe/openapi-react-query-codegen` via a PR-comment release workflow (August 28, 2026)
 
 A new **Mini Shai-Hulud** wave took over `@7nohe/openapi-react-query-codegen` — a TanStack
@@ -207,6 +229,27 @@ package set, and C2.
 
 - [Playbook](asyncapi_supply_chain/playbook.md) — repo analysis, CI log scan for import-time runtime egress (IPFS CIDs / HTTP C2 / `rentry.co`), own-org `pull_request_target` audit, deployed-artifact & network checks, and hardening
 - [Workstation Playbook](asyncapi_supply_chain/workstation-playbook.md) — dev-machine/runner forensics: `sync.js` drop paths, `miasma-monitor` persistence, npm cache by injected-file hash, network indicators, AI-agent conversation scanning
+
+---
+
+### Orkes Conductor Unauthenticated RCE — CVE-2026-58138 (June 2026, exploited since July)
+
+Conductor evaluates JavaScript/Python expressions embedded in workflow definitions
+through a GraalVM context that was created with **full host access hard-coded in
+Conductor's own source** (`allowHostAccess(HostAccess.ALL)`, `allowAllAccess(true)`)
+— so a submitted expression reaches arbitrary Java classes and runs OS commands as
+the Conductor process user. **The workflow API accepts definitions unauthenticated**,
+so no credentials are needed. CVSS 3.1 **9.8** / 4.0 **9.3**, CWE-94. Affects
+**3.21.21 – 3.30.1**; fixed in **3.30.2** (2026-06-03). A re-introduction of
+CVE-2025-26074, which was the same weakness in the older Nashorn evaluator. As an
+orchestrator it concentrates credentials by design — DB logins, the pod's cloud IAM
+role, queue credentials, downstream API tokens — so execution there is both a
+credential haul and a pivot, and workflow definitions can be altered with no commit
+or code review. Public PoC 2026-07-22, honeypot hits from 07-24, 6,696 blocked
+attempts in the week of 09-02. **The affected server versions were never published
+to Maven Central**, so no manifest can reference one and SCA will not find it.
+
+- [Playbook](orkes_conductor_rce/playbook.md) — three-path deployment discovery (image refs, client-SDK fingerprint, running workloads), version resolution from inside the container since the fat jar is renamed versionless, exposure check, workflow-definition audit for injected scripts, and remediation
 
 ---
 
