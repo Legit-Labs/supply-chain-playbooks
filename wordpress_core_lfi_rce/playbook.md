@@ -8,13 +8,20 @@
 # Your GitHub organization name
 export ORG="your-org-name"
 
-# Patch released 2026-09-22. First probing observed in the wild at 17:44 UTC
-# the same day. Use the patch date as the start of the log-review window —
-# the bug existed since 4.7.0 (2016), but targeted scanning began here.
+# Patch released 2026-09-22. First exploitation attempt recorded 11:49 UTC the
+# same day. Use the patch date as the start of the log-review window — the bug
+# existed since 4.7.0 (2016), but targeted scanning began here.
 export SINCE="2026-09-22T00:00:00Z"
 
-# No public IOC IP or domain list exists for this campaign. Hunt on request
-# shape (see Phase 4), not on an address allowlist.
+# Published attacker IPs (updated 2026-09-24). Opportunistic scanning, no named
+# actor — treat as a starting point, not a complete list.
+export ATTACKER_IPS="104.194.9.227|43.250.53.42|180.251.159.243|195.178.110.247|107.189.14.87|45.61.184.170|92.246.130.76"
+
+# Second-stage payload host observed in live attacks
+export PAYLOAD_URL="raw.githubusercontent.com/MrG3P5/web-shell"
+
+# Dropped-file names observed in the wild
+export DROP_NAMES="wp-pear-rce-flag\.php|poc87902\.php|luci_.*\.php|zeta_.*\.php"
 
 export LOG_DIR="/tmp/wordpress-cve-2026-87902"
 mkdir -p "$LOG_DIR"
@@ -76,6 +83,29 @@ curl -s https://api.wordpress.org/core/stable-check/1.0/ \
 - **`@wordpress/*` npm packages** — `@wordpress/scripts`, `@wordpress/element`, `@wordpress/escape-html` and the rest are the **Gutenberg JavaScript toolchain**. They contain none of the vulnerable code and are unaffected by a PHP core flaw. They are not even a reliable fingerprint that core is deployed — teams use them to build blocks for sites hosted elsewhere.
 - **WordPress-adjacent tooling** — `wordpress-exporter` (Prometheus metrics), `gatsby-source-wordpress`, `stylelint-config-wordpress`, `psalm-plugin-wordpress`. These talk *about* WordPress; they are not WordPress. An exporter does suggest an instance exists nearby — treat it as a lead for Phase 1, not as a finding.
 - Managed/hosted WordPress where the provider patches core (WordPress.com, WP Engine, Pressable and similar). Confirm which you are looking at before raising a finding.
+
+### Exploitation status — updated 2026-09-24
+
+Active and escalating. First exploitation attempt **2026-09-22 11:49 UTC**, the same day the patch
+shipped. Traffic has since moved from reconnaissance against harmless core files to **payload
+delivery**, roughly a **tenfold increase**, with **68 exploitation attempts** logged from
+2026-09-23 in honeypot telemetry. No named threat actor — opportunistic mass scanning. No publicly
+confirmed compromises yet; the expectation is relatively few, because WordPress auto-updates are on
+by default.
+
+**The observed chain, end to end:**
+
+1. Template lookup is steered to `/usr/local/lib/php/pearcmd.php`.
+2. `pearcmd` is driven via query-string arguments to write a PHP file to **`/tmp/`** or
+   **`/var/tmp/`**.
+3. That file is included, which fetches a second-stage uploader from
+   `raw.githubusercontent[.]com/MrG3P5/web-shell/refs/heads/main/uploader.php`.
+
+Dropped filenames seen in the wild: `wp-pear-rce-flag.php`, `poc87902.php`, `luci_<random>.php`,
+`zeta_<random>.php`.
+
+This is why Phase 4 checks `/tmp` before the webroot — the first write lands outside
+`wp-content/`, so a webroot-only search misses an attack in progress.
 
 ---
 
@@ -239,8 +269,28 @@ grep -aiE "pearcmd|pear/|config-create|download_dir" "$LOG_DIR/traversal-hits.tx
 
 Case- and encoding-variants matter: check `..%2f`, `%2e%2e%2f`, and double-encoded `%252e%252e`.
 
+Cross-reference the published attacker IPs and the second-stage payload host:
+
+```bash
+grep -aE "$ATTACKER_IPS" "$LOG_DIR"/*.txt 2>/dev/null
+grep -aiE "$PAYLOAD_URL|uploader\.php" "$LOG_DIR"/*.txt 2>/dev/null
+```
+
+An IP hit is corroboration, not proof, and its absence proves nothing — the list is a snapshot of
+opportunistic scanners, not a closed set.
+
 Then look for the effects of successful execution:
 
+- **Dropped PHP files. Check `/tmp` and `/var/tmp` FIRST** — that is where the observed chain
+  actually writes, before pulling the second stage. Checking only the webroot misses live attacks:
+  ```bash
+  kubectl exec -n <ns> <pod> -- sh -c \
+    'find /tmp /var/tmp -name "*.php" -newermt "2026-09-22" -ls 2>/dev/null'
+
+  # the specific names seen in the wild
+  kubectl exec -n <ns> <pod> -- sh -c \
+    'find / -regextype posix-extended -regex ".*/('"$DROP_NAMES"')" 2>/dev/null'
+  ```
 - PHP files written under `wp-content/uploads/` or anywhere outside the expected theme/plugin tree since `$SINCE`:
   ```bash
   kubectl exec -n <ns> <pod> -- sh -c \
@@ -299,3 +349,6 @@ Record one row per WordPress deployment:
 - **A stripped generator tag is not evidence of patching.** Hardening plugins remove the version from page source. Absence of a version externally means you have to exec in, not that you are safe.
 - **Exporters and source plugins are leads, not findings.** `wordpress-exporter` scraping metrics means an instance exists somewhere — possibly owned by another team, possibly an external property. Chase it to a real deployment before recording it.
 - **File inclusion is a finding even without RCE.** If `register_argc_argv` is Off, do not close the ticket — an unauthenticated attacker can still read arbitrary readable `.php` on the host, which includes `wp-config.php` and its database credentials.
+- **Searching only the webroot for dropped files misses the live attack.** The observed chain writes its first stage to `/tmp` or `/var/tmp`, not `wp-content/uploads` — the webroot only gets touched later, if the uploader succeeds. The first version of this playbook checked `wp-content/uploads` alone and would have returned clean against an in-progress compromise. Check `/tmp` first.
+- **`/tmp` is also noisy.** Legitimate PHP session files, caches and build artifacts live there. Filter by the observed names (`$DROP_NAMES`) and by mtime after `$SINCE` before calling anything a hit.
+- **The attacker IP list is a snapshot, not a boundary.** Seven addresses are published for opportunistic scanners that rotate. A hit corroborates; absence proves nothing. Hunt on request shape first, IPs second.
