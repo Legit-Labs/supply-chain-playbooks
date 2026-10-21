@@ -29,6 +29,25 @@ Each playbook produces:
 
 ## Compromises
 
+### php2shell — PHP Core Unauthenticated RCE — CVE-2026-109618, CVE-2026-109619 (October 21, 2026)
+
+Two critical memory-safety flaws in the **PHP interpreter itself** (CVSS 4.0 **9.2**
+each): out-of-memory handling that leaves request data half-initialized, and
+worker-global state that outlives the request that owns it. An unauthenticated
+HTTP request gets code execution as the PHP worker — on Apache mod_php **before any
+application code runs**, and on PHP-FPM through the session / unserialize paths
+that WordPress, Drupal, Magento, Laravel and most real applications reach. The
+vulnerable code dates to PHP 5.4; fixed in **8.5.12, 8.4.27, 8.3.36 and 8.2.35**,
+with no official release for 8.1 and older. **Attacks began before the fix
+shipped** — Cloudflare recorded exploitation from 07:43 UTC on release day. Like
+WordPress below, this is a **vulnerable deployed runtime**: the PHP interpreter is in
+no lock file, and the `"php"` constraint in `composer.json` is not a version, so
+SCA will not surface it.
+
+- [Playbook](php2shell/playbook.md) — explicit scope (validated / documented / not covered), rate-limit-safe org discovery of PHP Dockerfiles, manifests and `composer.json` apps, PHP version and SAPI resolution from image config and running containers (official, Debian, Alpine, RHEL/UBI, embedded-PHP images), interim-mitigation readout per SAPI, behavioral compromise review (worker-spawned processes, dropped PHP files, worker crashes / OOM fatals), and remediation
+
+---
+
 ### WordPress Core Unauthenticated LFI → RCE — CVE-2026-87902 (September 22, 2026)
 
 `get_page_template()` builds one of its candidate template filenames straight from
