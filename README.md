@@ -29,6 +29,26 @@ Each playbook produces:
 
 ## Compromises
 
+### LiteLLM 1.107.0 — hijacked release pipeline ships a stealer and backdoor to PyPI and the official images (October 21, 2026)
+
+An Agent Platform master key that LiteLLM leaked in a public repo in May and never
+revoked let an attacker take an organization owner's GitHub token, steal about 20 CI
+secrets, and on 21 October override branch protection to build the release from a
+lookalike fork (`Berri-AI/litellm`). The result was **`litellm==1.107.0`** on PyPI
+(11:39–13:23 UTC) and the same build in `ghcr.io/berriai/litellm*` and
+`docker.io/litellm/litellm`, **including the `latest`, `main-latest` and
+`main-stable` tags** (11:46–14:20 UTC). Three files dropped at the `site-packages`
+root (`cook.pth`, `cook.py`, `sitecustomize.py`) run on **every Python start**:
+a 16-module credential stealer (cloud, CI, SSH, AI-tool and browser secrets, plus
+every provider key in a LiteLLM proxy database) exfiltrating to `www.litellm.dev`,
+and an hourly backdoor polling a GitHub dead drop for code to run. Separate from the
+March 2026 incident below — the git tag is clean and only the published artifacts
+were poisoned.
+
+- [Playbook](litellm_1_107_0/playbook.md) — PyPI and container-image discovery (tags vs digests), CI log scan for the exact malicious version with rc-safe matching, shell-only host / container / Kubernetes implant check (never run Python on a suspect host), proxy-database and cloud blast radius, and ordered remediation
+
+---
+
 ### php2shell — PHP Core Unauthenticated RCE — CVE-2026-109618, CVE-2026-109619 (October 21, 2026)
 
 Two critical memory-safety flaws in the **PHP interpreter itself** (CVSS 4.0 **9.2**
