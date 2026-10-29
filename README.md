@@ -29,6 +29,26 @@ Each playbook produces:
 
 ## Compromises
 
+### MLflow Unauthenticated RCE & Arbitrary File Read — CVE-2026-116692, CVE-2026-116690 (October 2026, file read exploited since October 28)
+
+Two flaws in the **MLflow tracking server**, both reachable without credentials on
+the default `mlflow server` (no auth), and by any logged-in user with `basic-auth`.
+**CVE-2026-116692** (CVSS **9.8**, 3.12.0rc0–3.16.x): an attacker points an
+experiment's artifact location into MLflow's own scorer package, uploads a Python
+file as a run artifact, and has the third-party scorer endpoint import it — code
+execution as the server process (root in the official image). **CVE-2026-116690**
+(CVSS **7.5**, 3.10.0–3.16.1): a prompt-tagged model version with a relative
+`source` such as `../../../tmp` turns `model-versions/get-artifact` into a read of
+any server file, including the auth database. Fixed in **3.17.0**. Advisories went
+public on October 9 and 13; honeypots recorded file-read exploitation within a day
+of CVE assignment on October 27. This is a **vulnerable deployed server**: `mlflow`
+in a manifest is usually client code and not exploitable, so a dependency hit is a
+lead, not a finding.
+
+- [Playbook](mlflow_rce_file_read/playbook.md) — rate-limit-safe org discovery of MLflow tracking servers (deployment definitions, tracking-URI fingerprints, running workloads), shell-only version resolution (no Python on a suspect host), reachability / auth / writable-package checks, tracking-DB queries for staged experiments and malicious prompt versions, `RECORD`-diff detection of planted modules, access-log patterns (including the real `get-artifact` route), and remediation — validated against the official 3.14.0 image
+
+---
+
 ### LiteLLM 1.107.0 — hijacked release pipeline ships a stealer and backdoor to PyPI and the official images (October 21, 2026)
 
 An Agent Platform master key that LiteLLM leaked in a public repo in May and never
