@@ -29,6 +29,25 @@ Each playbook produces:
 
 ## Compromises
 
+### OpenSSH "sshole" Password Bypass on musl / Alpine — CVE-2026-123158 (November 5, 2026)
+
+`sshd` built against **musl** without PAM (Alpine's default `openssh-server`)
+accepts **any 257–1024 byte password** for an account whose `/etc/shadow` field
+is `*`. musl's `crypt()` returns `*` when hashing fails, and its SHA crypt fails
+on passwords over 256 bytes, so the oversized password "hashes" to the stored `*`.
+CVSS 8.1. Fixed in OpenSSH **10.6p2**, and Alpine backported the fix to every
+branch from 3.16 to edge. Alpine ≤ 3.15 gets no fix. Exposure needs password auth
+on (the default), a `*` account that can log in, and a real `$5$`/`$6$` hash on
+another account. The typical case is an Alpine SSH/SFTP/build-agent container
+that sets a password with `chpasswd`, or an Alpine cloud image 3.18.11–3.24.3,
+whose `alpine` user has passwordless `doas`. This is a **vulnerable OS package
+inside container images**: manifest scanning won't see it, and container scanners
+may lag the CVE.
+
+- [Playbook](openssh_sshole/playbook.md): org-wide discovery of Alpine images and VMs that run `sshd`, and one `sshole-check.sh` that runs inside an image or a live container. It checks the real `sshd` binary and its start flags (`-f`/`-o`), whether the binary is musl, the apk or embedded OpenSSH version against the fixed table, and evaluates `sshd -T -C user=` per account (Match blocks, `AllowUsers`/`DenyUsers`, `AuthenticationMethods`, expiry). It counts `*` targets from shadow or passwd and `$5$`/`$6$` salt donors. The playbook also covers the `Failed` then `Accepted password` same-connection log signature and rebuild/hardening steps. Validated against 21 Docker cases with a live exploit: the runtime check had 0 false positives and 0 false negatives
+
+---
+
 ### MLflow Unauthenticated RCE & Arbitrary File Read — CVE-2026-116692, CVE-2026-116690 (October 2026, file read exploited since October 28)
 
 Two flaws in the **MLflow tracking server**, both reachable without credentials on
