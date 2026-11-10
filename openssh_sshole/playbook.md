@@ -125,10 +125,10 @@ All of Phase 2 uses one script, `sshole-check.sh`. It runs **inside** the target
 
 What it checks, per `sshd`:
 
-- **Which `sshd`.** In a running container it uses the live `sshd` process: its real binary (`/proc/<pid>/exe`), plus the `-f` and `-o` flags it was started with. It reads the flags from argv, or from the `[listener]` process title that OpenSSH writes over argv. When `sshd` runs as a non-root user, only that user counts as a target, because a non-root `sshd` can only authenticate the account it runs as. For an image it uses the image's `ENTRYPOINT`/`CMD` when that starts `sshd`. Otherwise it checks every `sshd` / `sshd.pam` binary on disk with its default config. It finds unpackaged builds in `/usr/local` too.
+- **Which `sshd`.** In a running container it uses the live `sshd` process: its real binary (`/proc/<pid>/exe`), plus the `-f` and `-o` flags it was started with. It reads the flags from argv, or from the `[listener]` process title that OpenSSH writes over argv. When `sshd` runs as a non-root user, only that user counts as a target, because a non-root `sshd` can only authenticate the account it runs as. For an image it uses the image's `ENTRYPOINT`/`CMD` when that starts `sshd`, or the `sshd` line inside the entrypoint script the `CMD` runs. Otherwise it checks every `sshd` / `sshd.pam` binary on disk with its default config. It finds unpackaged builds in `/usr/local` too.
 - **Vulnerable build.** The binary is linked against musl. For an apk-owned binary, the package version is below the fixed version for its Alpine branch. For an unpackaged build, the embedded `OpenSSH_x.yPz` string is older than 10.6p2.
 - **Per-account reachability.** It runs `sshd -T -C user=<account>,host=<addr>,addr=<addr>,lport=<port>` with the same flags as the real daemon, so `Match` blocks apply. It tries each test client address (one public, `10.0.0.1`, `172.16.0.1`, `192.168.0.1`, `100.64.0.1`, then loopback) on every port `sshd` listens on. It then requires `passwordauthentication yes`, no PAM, an `authenticationmethods` that allows plain `password`, `permitrootlogin yes` for root, and that `AllowUsers`/`DenyUsers`/`AllowGroups`/`DenyGroups` admit the account.
-- **Targets and donors.** A target is an account whose effective password field is exactly `*`: the `/etc/shadow` entry, or the `/etc/passwd` field when there is no shadow line. Expired accounts are excluded. A donor is any account with a `$5$`/`$6$` hash.
+- **Targets and donors.** A target is an account whose effective password field is exactly `*`: the `/etc/shadow` entry, or the `/etc/passwd` field when there is no shadow line. Expired accounts are excluded. A donor is any account with a `$5$`/`$6$` hash. In image mode, if no account has one yet but a start-up step sets a password, the donor is reported as `set-at-start`, together with `password_set_at_start=[...]` naming where it happens. The step counts when it uses `chpasswd`, `usermod -p` or a piped `passwd`, and sits in the `CMD` itself, in the entrypoint script it runs, or in a common init location (`/docker-entrypoint.d`, `/etc/cont-init.d`, s6 `run`/`up` scripts and similar).
 
 ```bash
 cat > "$LOG_DIR/sshole-check.sh" <<'SSHOLE_CHECK'
@@ -256,6 +256,24 @@ parse_args() {  # sshd argv (one per line on stdin) -> ARGS with only -f / -o ke
   done
 }
 
+PW_SET_RE='(^|[^[:alnum:]_])chpasswd([^[:alnum:]_]|$)|usermod[[:space:]].*-p[[:space:]]|\|[[:space:]]*passwd[[:space:]]+[^-[:space:]]'
+
+startup_scripts() {  # files the image's ENTRYPOINT/CMD runs directly (scripts named in SSHD_CMDLINE)
+  for w in $SSHD_CMDLINE; do
+    case "$w" in /*) f=$w ;; *) f=$(command -v "$w" 2>/dev/null) ;; esac
+    [ -f "$f" ] || continue
+    head -c 2 "$f" 2>/dev/null | grep -q '#!' && echo "$f"
+  done
+}
+
+runtime_pw_sources() {  # where a start-up step sets a password: the CMD itself, its scripts, common init dirs
+  printf '%s\n' "$SSHD_CMDLINE" | grep -qE "$PW_SET_RE" && echo "image-cmd"
+  for f in $(startup_scripts) /docker-entrypoint.sh /entrypoint.sh /docker-entrypoint.d/* /etc/cont-init.d/* \
+           /custom-cont-init.d/* /etc/my_init.d/* /etc/s6-overlay/s6-rc.d/*/run /etc/s6-overlay/s6-rc.d/*/up; do
+    [ -f "$f" ] && grep -qE "$PW_SET_RE" "$f" 2>/dev/null && echo "$f"
+  done | sort -u
+}
+
 check_sshd() {  # check_sshd <binary> <mode>
   bin=$1; mode=$2; HK=""
   libc=glibc; { grep -q musl "$bin" || grep -aq musl "$bin"; } 2>/dev/null && libc=musl
@@ -278,6 +296,11 @@ check_sshd() {  # check_sshd <binary> <mode>
       '$5$'*|'$6$'*) donors="$donors $u" ;;
     esac
   done
+  pw_at_start=""
+  if [ "$mode" != runtime ] && [ -z "$donors" ]; then
+    pw_at_start=$(runtime_pw_sources | tr '\n' ' '); pw_at_start=${pw_at_start% }
+    [ -n "$pw_at_start" ] && donors=" set-at-start"
+  fi
   v=NOT_EXPOSED
   case "$vs" in VULNERABLE*)
     if [ "$libc" = musl ]; then
@@ -287,7 +310,7 @@ check_sshd() {  # check_sshd <binary> <mode>
     fi ;;
   esac
   [ "$mode" = image-default ] && [ "$v" = EXPOSED ] && v=EXPOSED_IF_SSHD_STARTED
-  echo "verdict=$v mode=$mode sshd=$bin args=[${ARGS# }]${RUN_USER:+ runs_as=$RUN_USER} libc=$libc alpine=${REL:-none} owner=$owner version=$ver status=$vs ports=[${PORTS% }] targets=[${targets# }]${via:+ via=$via} local_only_targets=[${local_targets# }] donors=[${donors# }] pw_match_blocks=$(pw_match_blocks "$bin")"
+  echo "verdict=$v mode=$mode sshd=$bin args=[${ARGS# }]${RUN_USER:+ runs_as=$RUN_USER} libc=$libc alpine=${REL:-none} owner=$owner version=$ver status=$vs ports=[${PORTS% }] targets=[${targets# }]${via:+ via=$via} local_only_targets=[${local_targets# }] donors=[${donors# }]${pw_at_start:+ password_set_at_start=[$pw_at_start]} pw_match_blocks=$(pw_match_blocks "$bin")"
 }
 
 found=0; SEEN=""; RUN_USER=""
@@ -318,6 +341,15 @@ $argv
 EOF
   check_sshd "$bin" runtime; found=1
 done
+
+if [ $found = 0 ] && [ -n "$SSHD_CMDLINE" ] && ! printf '%s' "$SSHD_CMDLINE" | grep -q 'sshd'; then
+  for f in $(startup_scripts); do
+    line=$(grep -E '(^|[[:space:]/])sshd(\.pam)?([[:space:]]|$)' "$f" 2>/dev/null | grep -vE '^[[:space:]]*#' | head -1)
+    if [ -n "$line" ]; then
+      SSHD_CMDLINE="$SSHD_CMDLINE $(printf '%s' "$line" | sed -E 's/^[[:space:]]*(exec[[:space:]]+)?//')"; break
+    fi
+  done
+fi
 
 if [ $found = 0 ] && [ -n "$SSHD_CMDLINE" ] && printf '%s' "$SSHD_CMDLINE" | grep -q 'sshd'; then
   bin=$(printf '%s\n' $SSHD_CMDLINE | grep -m1 'sshd')
@@ -356,7 +388,7 @@ done < "$LOG_DIR/images.txt" | tee "$LOG_DIR/image-verdicts.tsv"
 
 ### 2b. Check running containers (authoritative)
 
-The image check can't see what happens at start-up: entrypoints that add users or set passwords, `sshd` flags injected by an init system, or config rendered from env vars. For every **running** workload from a candidate image, run the same script against the live container:
+The image check reads the `CMD`, its entrypoint script and common init locations, but it can't see everything that happens at start-up: users created at runtime, `sshd` flags injected by an init system, or config rendered from env vars. For every **running** workload from a candidate image, run the same script against the live container:
 
 ```bash
 # Kubernetes: the exec user must be able to read /etc/shadow (root). Add -c <container> for multi-container pods.
@@ -488,7 +520,7 @@ Write one row per image or host to `$LOG_DIR/evidence-repos.csv`:
 
 ## Pitfalls & Fixes
 
-These come from a 26-case lab run. Each case was a Docker container checked against the live two-step bypass; the cases include real `jenkins/ssh-agent:alpine3.24` and `linuxserver/openssh-server` images.
+These come from a 28-case lab run. Each case was a Docker container checked against the live two-step bypass; the cases include real `jenkins/ssh-agent:alpine3.24` and `linuxserver/openssh-server` images.
 
 - **Read the running daemon, not the default config.** `sshd` started with `-o PasswordAuthentication=yes` or `-f /path/custom_config` was exploitable while `/etc/ssh/sshd_config` said `no`. The script takes `-f`/`-o` from the live process (or the image `CMD`) and passes them to `sshd -T`.
 - **`PasswordAuthentication no` can be silently undone, and plain `sshd -T` hides it.** Alpine's recommended drop-in (`00-no-passwords.conf`) blocked the bypass on its own. But with a later `Match Address 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` or `Match LocalPort 2222` block setting it back to `yes`, the bypass worked from an internal address or on that port, while `sshd -T` still printed `passwordauthentication no`. The script evaluates every test address and listening port and reports `pw_match_blocks`.
@@ -496,7 +528,7 @@ These come from a 26-case lab run. Each case was a Docker container checked agai
 - **`*` can live in `/etc/passwd`.** An account with `*` in its passwd field and **no** shadow line was bypassed, because `sshd` falls back to the passwd field. Grepping `/etc/shadow` alone misses it, in both the state check and the log check.
 - **Not every `sshd` comes from apk.** A from-source OpenSSH in `/usr/local/sbin` was exploitable and invisible to `apk info`. The script finds the binary from the process or disk, decides musl from the binary, and reads its embedded `OpenSSH_x.yPz` version.
 - **An installed `sshd` isn't a running `sshd`.** An image with an exploitable state whose `CMD` never starts `sshd` is reported as `EXPOSED_IF_SSHD_STARTED`, not `EXPOSED`. The runtime check (2b) settles it.
-- **Start-up scripts change the answer.** A donor password set by the entrypoint is `VULNERABLE_PACKAGE_ONLY` in the image and `EXPOSED` at runtime. Always run 2b on running workloads.
+- **Start-up scripts change the answer.** A donor password set by the entrypoint, inline in the `CMD` or in an `/entrypoint.sh` it runs, does not exist in the image yet, so it was missed until the script started reading those steps (`donors=[set-at-start]`). Init systems and runtime-generated config are still only visible to 2b, so always run 2b on running workloads.
 - **`apk add openssh` is not `openssh-client`.** On Alpine, the `openssh` meta-package pulls in `openssh-server`. Treat it as a server install, then check whether `sshd` is ever started.
 - **glibc images are full of `*` accounts.** `debian:bookworm-slim` has 17 of them (`daemon`, `bin`, `www-data`, ...). They are irrelevant without musl. The script gates on the binary's libc. Don't hand-grep `/etc/shadow` and flag glibc images.
 - **`UsePAM` missing from `sshd -T` means no PAM.** Alpine's non-PAM build doesn't recognise the keyword. `sshd.pam` (the `openssh-server-pam` binary) is checked too.

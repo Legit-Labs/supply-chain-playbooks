@@ -44,7 +44,7 @@ whose `alpine` user has passwordless `doas`. This is a **vulnerable OS package
 inside container images**: manifest scanning won't see it, and container scanners
 may lag the CVE.
 
-- [Playbook](openssh_sshole/playbook.md): org-wide discovery of Alpine images and VMs that run `sshd`, and one `sshole-check.sh` that runs inside an image or a live container. It checks the real `sshd` binary and its start flags (`-f`/`-o`), whether the binary is musl, the apk or embedded OpenSSH version against the fixed table, and evaluates `sshd -T -C user=` per account (Match blocks, `AllowUsers`/`DenyUsers`, `AuthenticationMethods`, expiry). It counts `*` targets from shadow or passwd and `$5$`/`$6$` salt donors. The playbook also covers the `Failed` then `Accepted password` same-connection log signature and rebuild/hardening steps. Validated against 26 Docker cases with a live exploit: the runtime check had 0 false positives and 0 false negatives
+- [Playbook](openssh_sshole/playbook.md): org-wide discovery of Alpine images and VMs that run `sshd`, and one `sshole-check.sh` that runs inside an image or a live container. It checks the real `sshd` binary and its start flags (`-f`/`-o`), whether the binary is musl, the apk or embedded OpenSSH version against the fixed table, and evaluates `sshd -T -C user=` per account (Match blocks, `AllowUsers`/`DenyUsers`, `AuthenticationMethods`, expiry). It counts `*` targets from shadow or passwd and `$5$`/`$6$` salt donors. The playbook also covers the `Failed` then `Accepted password` same-connection log signature and rebuild/hardening steps. Validated against 28 Docker cases with a live exploit: the image, running-container and log checks each had 0 false positives and 0 false negatives
 
 ---
 
