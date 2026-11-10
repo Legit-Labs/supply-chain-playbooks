@@ -64,7 +64,7 @@ Outside Alpine: any OpenSSH **before 10.6p2** built against musl without PAM (Op
 - **glibc** images and hosts (Debian, Ubuntu, Fedora, RHEL, UBI, distroless-glibc), even with many `*` accounts in `/etc/shadow`. glibc `crypt()` returns `NULL` on failure.
 - Alpine images that install only the **client** (`openssh-client`, `openssh-client-default`, `openssh-keygen`), or install `openssh-server` but never start `sshd`. Common case: `apk add openssh` for `git` over SSH in CI.
 - `sshd` with `UsePAM yes` (`openssh-server-pam`).
-- `PasswordAuthentication no` (key-only).
+- `PasswordAuthentication no` (key-only), **as long as** nothing re-enables it: no startup flag `-o PasswordAuthentication=yes`, no alternate `-f` config, and no `Match` block setting it back to `yes` for some addresses, ports or users.
 - Accounts locked with `!` (Alpine root before 3.16, `passwd -l` users). Only an exact `*` matches.
 - `root` when `PermitRootLogin` is anything other than `yes`.
 - Images with **no** `$5$`/`$6$` hash anywhere. With no real hash to borrow a salt from, the fake salt falls back to DES, which never returns `*`. A yescrypt (`$y$`) hash copied in from a glibc distro did **not** act as a donor in testing.
@@ -127,7 +127,7 @@ What it checks, per `sshd`:
 
 - **Which `sshd`.** In a running container it uses the live `sshd` process: its real binary (`/proc/<pid>/exe`), plus the `-f` and `-o` flags it was started with. It reads the flags from argv, or from the `[listener]` process title that OpenSSH writes over argv. When `sshd` runs as a non-root user, only that user counts as a target, because a non-root `sshd` can only authenticate the account it runs as. For an image it uses the image's `ENTRYPOINT`/`CMD` when that starts `sshd`. Otherwise it checks every `sshd` / `sshd.pam` binary on disk with its default config. It finds unpackaged builds in `/usr/local` too.
 - **Vulnerable build.** The binary is linked against musl. For an apk-owned binary, the package version is below the fixed version for its Alpine branch. For an unpackaged build, the embedded `OpenSSH_x.yPz` string is older than 10.6p2.
-- **Per-account reachability.** It runs `sshd -T -C user=<account>,...` with the same flags as the real daemon, so `Match` blocks apply. It then requires `passwordauthentication yes`, no PAM, an `authenticationmethods` that allows plain `password`, `permitrootlogin yes` for root, and that `AllowUsers`/`DenyUsers`/`AllowGroups`/`DenyGroups` admit the account.
+- **Per-account reachability.** It runs `sshd -T -C user=<account>,host=<addr>,addr=<addr>,lport=<port>` with the same flags as the real daemon, so `Match` blocks apply. It tries each test client address (one public, `10.0.0.1`, `172.16.0.1`, `192.168.0.1`, `100.64.0.1`, then loopback) on every port `sshd` listens on. It then requires `passwordauthentication yes`, no PAM, an `authenticationmethods` that allows plain `password`, `permitrootlogin yes` for root, and that `AllowUsers`/`DenyUsers`/`AllowGroups`/`DenyGroups` admit the account.
 - **Targets and donors.** A target is an account whose effective password field is exactly `*`: the `/etc/shadow` entry, or the `/etc/passwd` field when there is no shadow line. Expired accounts are excluded. A donor is any account with a `$5$`/`$6$` hash.
 
 ```bash
@@ -143,6 +143,10 @@ FIXED_TABLE="3.24:10.3_p1-r2 3.23:10.2_p1-r1 3.22:10.0_p1-r11 3.21:9.9_p2-r1 3.2
 REL=$(cut -d. -f1,2 /etc/alpine-release 2>/dev/null)
 TODAY=$(( $(date +%s) / 86400 ))
 TMPK=/tmp/.sshole_hostkey
+# Client addresses to evaluate Match blocks against: a public one plus the private/CGNAT ranges an
+# internal attacker would come from. Loopback is tracked separately (local-only exposure).
+NET_ADDRS="203.0.113.10 10.0.0.1 172.16.0.1 192.168.0.1 100.64.0.1"
+LOCAL_ADDRS="127.0.0.1 ::1"
 
 ver_lt() {  # ver_lt A B -> true if upstream version A < B (e.g. 10.0p1 < 10.6p2)
   awk -v a="$1" -v b="$2" 'BEGIN{
@@ -186,18 +190,19 @@ matches_any() {  # matches_any <word> <glob list...>
   return 1
 }
 
-eff_cfg() {  # eff_cfg <binary> <user> -> effective sshd -T output for that user (Match blocks applied)
-  out=$(eval "\"$1\" -T $ARGS -C user=$2,host=probe.invalid,addr=203.0.113.10" 2>/dev/null)
-  if [ -z "$out" ]; then
-    [ -f "$TMPK" ] || ssh-keygen -q -t ed25519 -N '' -f "$TMPK" >/dev/null 2>&1 || "$(dirname "$1")/../bin/ssh-keygen" -q -t ed25519 -N '' -f "$TMPK" >/dev/null 2>&1
-    out=$(eval "\"$1\" -T $ARGS -h $TMPK -C user=$2,host=probe.invalid,addr=203.0.113.10" 2>/dev/null)
+sshd_T() {  # sshd_T <binary> [-C spec] -> sshd -T output with the daemon's own -f/-o flags
+  b=$1; shift
+  out=$(eval "\"$b\" -T $ARGS $HK" '"$@"' 2>/dev/null)
+  if [ -z "$out" ] && [ -z "$HK" ]; then
+    [ -f "$TMPK" ] || ssh-keygen -q -t ed25519 -N '' -f "$TMPK" >/dev/null 2>&1 || "$(dirname "$b")/../bin/ssh-keygen" -q -t ed25519 -N '' -f "$TMPK" >/dev/null 2>&1
+    HK="-h $TMPK"
+    out=$(eval "\"$b\" -T $ARGS $HK" '"$@"' 2>/dev/null)
   fi
   printf '%s\n' "$out"
 }
 
-user_reachable() {  # user_reachable <binary> <user> -> 0 if password auth would be tried for this user
-  c=$(eff_cfg "$1" "$2")
-  [ -n "$c" ] || return 1
+cfg_allows() {  # cfg_allows <user> <sshd -T output> -> 0 if that effective config lets <user> try a password
+  c=$2
   val() { printf '%s\n' "$c" | awk -v k="$1" '$1==k{$1=""; sub(/^ /,""); print}'; }
   [ "$(val passwordauthentication)" = yes ] || return 1
   [ "$(val usepam)" = yes ] && return 1
@@ -205,15 +210,39 @@ user_reachable() {  # user_reachable <binary> <user> -> 0 if password auth would
   if [ -n "$am" ] && [ "$am" != any ]; then
     ok=1; for m in $am; do [ "$m" = password ] && ok=0; done; [ $ok = 0 ] || return 1
   fi
-  if [ "$2" = root ]; then [ "$(val permitrootlogin)" = yes ] || return 1; fi
+  if [ "$1" = root ]; then [ "$(val permitrootlogin)" = yes ] || return 1; fi
   au=$(val allowusers | tr '\n' ' '); du=$(val denyusers | tr '\n' ' ')
   ag=$(val allowgroups | tr '\n' ' '); dg=$(val denygroups | tr '\n' ' ')
-  groups=$(id -Gn "$2" 2>/dev/null)
-  [ -n "$du" ] && matches_any "$2" $du && return 1
-  [ -n "$au" ] && ! matches_any "$2" $au && return 1
+  groups=$(id -Gn "$1" 2>/dev/null)
+  [ -n "$du" ] && matches_any "$1" $du && return 1
+  [ -n "$au" ] && ! matches_any "$1" $au && return 1
   if [ -n "$dg" ]; then for g in $groups; do matches_any "$g" $dg && return 1; done; fi
   if [ -n "$ag" ]; then hit=1; for g in $groups; do matches_any "$g" $ag && hit=0; done; [ $hit = 0 ] || return 1; fi
   return 0
+}
+
+user_reach() {  # user_reach <binary> <user> -> prints "net <addr>:<port>", "local <addr>:<port>" or nothing
+  for set in net local; do
+    if [ $set = net ]; then addrs=$NET_ADDRS; else addrs=$LOCAL_ADDRS; fi
+    for a in $addrs; do
+      for pt in $PORTS; do
+        # host=<addr> mirrors the default UseDNS no, where Match Host sees the client address
+        if cfg_allows "$2" "$(sshd_T "$1" -C "user=$2,host=$a,addr=$a,laddr=0.0.0.0,lport=$pt")"; then echo "$set $a:$pt"; return; fi
+      done
+    done
+  done
+}
+
+pw_match_blocks() {  # count Match blocks that set PasswordAuthentication yes, across the config and its Includes
+  main=$(printf '%s\n' "$ARGS" | sed -n "s/.*-f '\([^']*\)'.*/\1/p")
+  [ -n "$main" ] || main=$(grep -ao '/[A-Za-z0-9_./-]*/sshd_config' "$1" 2>/dev/null | head -1)
+  [ -f "$main" ] || { echo 0; return; }
+  files=$main
+  for g in $(awk 'tolower($1)=="include"{for(i=2;i<=NF;i++) print $i}' "$main"); do
+    case "$g" in /*) ;; *) g="$(dirname "$main")/$g" ;; esac
+    for f in $g; do [ -f "$f" ] && files="$files $f"; done
+  done
+  awk 'tolower($1)=="match"{m=1; next} m && tolower($1)=="passwordauthentication" && tolower($2)=="yes"{n++} END{print n+0}' $files
 }
 
 parse_args() {  # sshd argv (one per line on stdin) -> ARGS with only -f / -o kept, shell-quoted
@@ -228,26 +257,37 @@ parse_args() {  # sshd argv (one per line on stdin) -> ARGS with only -f / -o ke
 }
 
 check_sshd() {  # check_sshd <binary> <mode>
-  bin=$1; mode=$2
+  bin=$1; mode=$2; HK=""
   libc=glibc; { grep -q musl "$bin" || grep -aq musl "$bin"; } 2>/dev/null && libc=musl
   set -- $(pkg_status "$bin"); owner=$1; ver=$2; vs=$3
-  targets=""; donors=""
+  # a -C spec is required as soon as the config has any Match block keyed on lport/laddr
+  PORTS=$(sshd_T "$bin" -C "user=root,host=203.0.113.10,addr=203.0.113.10,laddr=0.0.0.0,lport=22" | awk '$1=="port"{print $2}' | sort -u | tr '\n' ' ')
+  [ -n "$PORTS" ] || PORTS=22
+  targets=""; local_targets=""; donors=""; via=""
   for u in $(cut -d: -f1 /etc/passwd); do
     f=$(account_field "$u")
     [ -n "$RUN_USER" ] && [ "$u" != "$RUN_USER" ] && case "$f" in '*') continue ;; esac
     case "$f" in
-      '*') expired "$u" || { user_reachable "$bin" "$u" && targets="$targets $u"; } ;;
+      '*')
+        expired "$u" && continue
+        r=$(user_reach "$bin" "$u")
+        case "$r" in
+          net*)   targets="$targets $u"; [ -n "$via" ] || via=${r#net } ;;
+          local*) local_targets="$local_targets $u" ;;
+        esac ;;
       '$5$'*|'$6$'*) donors="$donors $u" ;;
     esac
   done
   v=NOT_EXPOSED
   case "$vs" in VULNERABLE*)
     if [ "$libc" = musl ]; then
-      if [ -n "$targets" ] && [ -n "$donors" ]; then v=EXPOSED; else v=VULNERABLE_PACKAGE_ONLY; fi
+      if [ -n "$donors" ] && [ -n "$targets" ]; then v=EXPOSED
+      elif [ -n "$donors" ] && [ -n "$local_targets" ]; then v=EXPOSED_LOCAL_ONLY
+      else v=VULNERABLE_PACKAGE_ONLY; fi
     fi ;;
   esac
   [ "$mode" = image-default ] && [ "$v" = EXPOSED ] && v=EXPOSED_IF_SSHD_STARTED
-  echo "verdict=$v mode=$mode sshd=$bin args=[${ARGS# }]${RUN_USER:+ runs_as=$RUN_USER} libc=$libc alpine=${REL:-none} owner=$owner version=$ver status=$vs targets=[${targets# }] donors=[${donors# }]"
+  echo "verdict=$v mode=$mode sshd=$bin args=[${ARGS# }]${RUN_USER:+ runs_as=$RUN_USER} libc=$libc alpine=${REL:-none} owner=$owner version=$ver status=$vs ports=[${PORTS% }] targets=[${targets# }]${via:+ via=$via} local_only_targets=[${local_targets# }] donors=[${donors# }] pw_match_blocks=$(pw_match_blocks "$bin")"
 }
 
 found=0; SEEN=""; RUN_USER=""
@@ -332,10 +372,13 @@ How to read the verdicts:
 | `EXPOSED` (`mode=runtime`) | A live `sshd` is vulnerable and at least one `*` account is reachable with a password while a `$5$/$6$` donor exists | Exploitable now if the port is reachable. Go to Phase 3 immediately, then rebuild. |
 | `EXPOSED` (`mode=image-cmd`) | The image's own start command would run an exploitable `sshd` | Find every running workload from this image and run 2b. Rebuild. |
 | `EXPOSED_IF_SSHD_STARTED` (`mode=image-default`) | Exploitable state on disk, but nothing in the image command starts `sshd` (or an init system such as s6/supervisord starts it) | Run 2b on running workloads; it settles whether `sshd` actually runs. Rebuild. |
-| `VULNERABLE_PACKAGE_ONLY` | Vulnerable musl `sshd`, but no reachable `*` target or no donor in this state | Rebuild. If seen in image mode, also run 2b, because start-up scripts can create the missing piece. |
+| `EXPOSED_LOCAL_ONLY` | Password auth for a `*` account is enabled only for loopback clients (e.g. `Match Address 127.0.0.1`) | Not reachable from the network, but any foothold inside the container or host can use it to switch accounts. Rebuild; fix the `Match` block. |
+| `VULNERABLE_PACKAGE_ONLY` | Vulnerable musl `sshd`, but no reachable `*` target or no donor in this state | Rebuild. If seen in image mode, also run 2b, because start-up scripts can create the missing piece. If `pw_match_blocks` is above 0, review those `Match` blocks by hand (see below). |
 | `NOT_EXPOSED` | glibc, no `sshd`, or a fixed version | No action for this CVE. |
 
-`targets=[...]` lists the accounts a bypass would log in as, and `donors=[...]` the accounts supplying the salt. Record both in the evidence table.
+`targets=[...]` lists the accounts a bypass would log in as, and `via=<addr>:<port>` the first test client address and listening port that reached them. `donors=[...]` lists the accounts supplying the salt. Record all three in the evidence table.
+
+`pw_match_blocks=N` counts `Match` blocks, in the config and its `Include`d files, that set `PasswordAuthentication yes`. The script tests a public address, the RFC 1918 and CGNAT ranges, and loopback, on every port `sshd` listens on. It does **not** test `Match Host` patterns that need reverse DNS, `Match LocalAddress`, or exotic address ranges. So when the verdict is not `EXPOSED` but `pw_match_blocks` is above 0, read each block's condition. If an attacker could satisfy it, treat the `sshd` as exposed.
 
 ### 2c. Alpine VMs and cloud images
 
@@ -409,7 +452,13 @@ Treat the container or host as compromised. Capture `/root/.ssh/authorized_keys`
    PasswordAuthentication no
    KbdInteractiveAuthentication no
    ```
-   Then run `sshd -t && rc-service sshd restart` (or rebuild) and verify with `sshd -T | grep -i passwordauthentication`. Keep a session open and test a key login before closing it.
+   Then run `sshd -t && rc-service sshd restart` (or rebuild). Keep a session open and test a key login before closing it.
+
+   **Verify with `sshole-check.sh` against the running container or host, not with `sshd -T | grep passwordauthentication`.** In the lab, three setups printed `passwordauthentication no` there and were still exploitable:
+   - `sshd` was started with `-o PasswordAuthentication=yes`, or with `-f` pointing at a different config file. Command-line flags beat the config file.
+   - A `Match Address 10.0.0.0/8,...` or `Match LocalPort 2222` block set `PasswordAuthentication yes` after the drop-in. Plain `sshd -T` shows only the settings for a connection that matches no `Match` block.
+
+   Also check that the drop-in is read at all. Alpine's default `sshd_config` has `Include /etc/ssh/sshd_config.d/*.conf` at the top, but some images comment it out or ship their own config (linuxserver does both). Images that render `sshd_config` at start-up need their own setting: on linuxserver, set `PASSWORD_ACCESS=false`, because the init script rewrites `PasswordAuthentication` from that variable on every start.
 4. **Stop baking passwords into images**: remove `chpasswd` / `echo user:pass | chpasswd` / `passwd` steps from Dockerfiles and entrypoints. For third-party images, switch to key auth (linuxserver: `PASSWORD_ACCESS=false` with `PUBLIC_KEY`; atmoz/sftp: mount keys instead of `user:pass`). Lock unused accounts with `!` (`passwd -l`), not `*`.
 5. **If Phase 3 found a likely bypass, rotate everything reachable from that container or host**: CI/CD secrets mounted or injected into it, deploy keys and `authorized_keys`, registry credentials, cloud credentials and instance-role sessions, and any secrets in its environment or volumes. Then review its outbound connections and changes since `$DISCLOSED`.
 6. **Don't expose `sshd` in containers at all** where you can avoid it. Use `kubectl exec` / `docker exec`, SSM Session Manager, or a hardened glibc bastion.
@@ -439,9 +488,10 @@ Write one row per image or host to `$LOG_DIR/evidence-repos.csv`:
 
 ## Pitfalls & Fixes
 
-These come from a 21-case lab run. Each case was a Docker container checked against the live two-step bypass; the cases include real `jenkins/ssh-agent:alpine3.24` and `linuxserver/openssh-server` images.
+These come from a 26-case lab run. Each case was a Docker container checked against the live two-step bypass; the cases include real `jenkins/ssh-agent:alpine3.24` and `linuxserver/openssh-server` images.
 
 - **Read the running daemon, not the default config.** `sshd` started with `-o PasswordAuthentication=yes` or `-f /path/custom_config` was exploitable while `/etc/ssh/sshd_config` said `no`. The script takes `-f`/`-o` from the live process (or the image `CMD`) and passes them to `sshd -T`.
+- **`PasswordAuthentication no` can be silently undone, and plain `sshd -T` hides it.** Alpine's recommended drop-in (`00-no-passwords.conf`) blocked the bypass on its own. But with a later `Match Address 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` or `Match LocalPort 2222` block setting it back to `yes`, the bypass worked from an internal address or on that port, while `sshd -T` still printed `passwordauthentication no`. The script evaluates every test address and listening port and reports `pw_match_blocks`.
 - **Evaluate per account, not globally.** `Match User svc` + `PasswordAuthentication no`, `AllowUsers`, `AuthenticationMethods publickey`, and an expired account all left a global `sshd -T` saying "exposed" when the bypass failed. The script runs `sshd -T -C user=<account>` and applies those rules per target.
 - **`*` can live in `/etc/passwd`.** An account with `*` in its passwd field and **no** shadow line was bypassed, because `sshd` falls back to the passwd field. Grepping `/etc/shadow` alone misses it, in both the state check and the log check.
 - **Not every `sshd` comes from apk.** A from-source OpenSSH in `/usr/local/sbin` was exploitable and invisible to `apk info`. The script finds the binary from the process or disk, decides musl from the binary, and reads its embedded `OpenSSH_x.yPz` version.
