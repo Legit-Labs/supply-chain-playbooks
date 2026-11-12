@@ -17,6 +17,7 @@ Playbook for investigating whether a GitHub org was hit by the **wfx-loot** camp
 
 ### Attack chain
 
+0. **Initial access (partially known):** the attacker holds stolen GitHub tokens for developer and bot accounts. The theft vector isn't confirmed for the whole campaign. 173 probe PRs from 19 accounts came through the **Fly.io GitHub App** using user-to-server tokens; StepSecurity found no evidence Fly.io itself was breached. One victim (`StringKe/kxen` PR #52) traced it to a **leaked GitHub CLI (`gh`) OAuth token**, which is long-lived, carries full repo scope, and is stored in plaintext under `~/.config/gh/hosts.yml`. Bot accounts with branch-protection bypass (`wdio-bot`, `drubot`) let the payload land directly on protected default branches.
 1. **Probe:** opens a PR titled `docs: dependency audit notes` from branch `wfx-docs`, adding `docs/wfx-audit.md` (git blob `ee6e5addfe591923fc385553cb66cf0d25634a6b`). This confirms the token can write. **A probe PR in your repo means the PR author's token is stolen and has write access — even if no payload followed.**
 2. **Payload** (four forms):
 
@@ -173,6 +174,7 @@ done < "$OUT/probe-prs.tsv" > "$OUT/probe-prs-detail.tsv"
 
 - `head.repo == repo` and head branch `wfx-docs` → **the PR author's token wrote a branch to your repo.** Treat that account as compromised and investigate the repo fully in Phase 2.
 - `performed_via_github_app.slug == fly-io` → opened through the Fly.io GitHub App with that user's authorization. The user's OAuth grant to the app is in scope for revocation.
+- No app slug → a token held directly: a PAT, or a GitHub CLI (`gh`) OAuth token (one confirmed case). The audit log's `programmatic_access_type` (Phase 2.4) tells you which.
 - Every distinct PR author is a **compromised account**. List the **other** repos in your org that account can write to: they're in scope even without a probe PR, because the probe isn't always opened.
 
 ```bash
@@ -521,7 +523,7 @@ Do not run destructive steps without the user's approval. Order matters: **evict
 ### Remediation — if anything beyond "NOT AFFECTED"
 
 1. **Remove live payloads** found in Phase 2.5: revert the file or `package.json` hook on every branch where it still exists.
-2. **Lock down every compromised account:** revoke its PATs (fine-grained and classic), OAuth app grants (including the Fly.io app if used for probes), SSH keys, and active sessions; require a password reset and 2FA re-enrollment; scan the owner's machine for an infostealer (the tokens came from somewhere). For org-owned tokens use `/orgs/$ORG/personal-access-tokens` to list and revoke fine-grained PATs. For bot or machine accounts (`drubot`, `wdio-bot` in public cases), rotate their tokens and review any branch-protection bypass they hold.
+2. **Lock down every compromised account:** revoke its PATs (fine-grained and classic), **GitHub CLI login tokens** (Settings → Applications → Authorized OAuth Apps → *GitHub CLI* → Revoke; then `gh auth logout` and re-login on each machine), OAuth and GitHub App authorizations (including **Fly.io** — the app most probe PRs were opened through), SSH keys, and active sessions; require a password reset and 2FA re-enrollment; scan the owner's machine for an infostealer (the tokens came from somewhere). For org-owned tokens use `/orgs/$ORG/personal-access-tokens` to list and revoke fine-grained PATs. For bot or machine accounts (`drubot`, `wdio-bot` in public cases), rotate their tokens and review any branch-protection bypass they hold.
 3. **Remove cloud persistence first:**
    - AWS: restore the original trust policy on every wildcard role; delete IAM access keys created since November 10; revoke active sessions on every affected role (IAM console → role → **Revoke active sessions**, which adds the `AWSRevokeOlderSessions` deny policy).
    - Azure: delete `wfx-ci-*` federated credentials; revoke refresh tokens for users whose Azure CLI cache was on an affected runner (`az ad user revoke-sign-in-sessions` or `Revoke-MgUserSignInSession`).
