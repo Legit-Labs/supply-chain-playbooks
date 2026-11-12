@@ -29,6 +29,30 @@ Each playbook produces:
 
 ## Compromises
 
+### wfx-loot / WFX Phantom — hijacked GitHub accounts push a self-erasing CI secret stealer (November 10, 2026 – ongoing)
+
+Stolen GitHub tokens from about **4,800 accounts** were used to push a ~1,500-line
+stealer into every repository each token could write to: **61,000+ repos** probed
+with a `docs: dependency audit notes` PR, **8,000+** given a malicious commit, and
+at least **1,800** where it ran. The payload goes in as an injected workflow step,
+an appended CI script, a throwaway `build-audit-*.yml` workflow, or a `postinstall`
+hook. It dumps every Actions secret and variable plus runner memory, exchanges
+GitHub OIDC tokens for AWS / GCP / Azure sessions, and leaves backdoors that survive
+rotation: a wildcard AWS trust policy and `wfx-ci-*` Azure federated credentials.
+Then it **reverts itself and deletes the run and its logs**.
+
+- [Playbook](wfx_loot_github_actions/playbook.md): detection that survives cleanup.
+  It walks the repository Activity API (pushes, force-pushes, and branch
+  create/delete), resolves each pushed SHA and checks the commit message, the
+  file names, and the payload content, finds deleted runs through per-workflow
+  run-number gaps, and covers the audit log and probe-PR search. It also includes
+  impact mapping (all secrets plus OIDC reach), AWS / Azure / GCP / Vault / K8s
+  persistence checks, developer-machine and published-package checks, and
+  remediation and hardening. Dry-run against confirmed-hit public repos: it caught
+  an attacker commit that the maintainer had force-pushed out of branch history
+
+---
+
 ### OpenSSH "sshole" Password Bypass on musl / Alpine — CVE-2026-123158 (November 5, 2026)
 
 `sshd` built against **musl** without PAM (Alpine's default `openssh-server`)
