@@ -12,6 +12,7 @@ Read this before running it, so a clean result is read for what it is.
 
 | Area | What was checked |
 |---|---|
+| Live dry run (Phases 1–4) | Phase 1 against a real GitHub organization (230-hit positive control, 3 NGINX Dockerfiles found). Phases 1c–4 against a live Kubernetes cluster: an Alpine/Wolfi `nginx-mainline` 1.31.8 frontend and two Kong gateways (OpenResty 1.19.9.1 and 1.15.8.3, custom prefix, binary not on `PATH`). Versions, HTTP/2 verdicts and compromise checks all resolved; the false positives found are in Pitfalls |
 | Version from image config (2a) | Registry configs of `nginx:1.31.8`, `nginx:1.31.9-alpine`, `nginx:stable`, `bitnami/nginx`, `openresty/openresty:alpine`, `registry.k8s.io/ingress-nginx/controller:v1.13.7`: official images expose `NGINX_VERSION`, Bitnami exposes `APP_VERSION`, OpenResty and ingress-nginx expose **no version** (→ 2b) |
 | HTTP/2 check script (3a) | Run against sample `nginx -T` dumps: finds `http2 on;` (including several directives on one line), `listen [::]:443 ssl http2 default_server;`, `proxy_pass` / `grpc_pass` and `worker_connections`. Ignores commented-out `http2`, `http2 off;` and `location /http2/`. Refuses an empty dump |
 | Classifier (`classify.py`) | Sanity-checked against the version boundaries below |
@@ -106,7 +107,7 @@ The same release fixes eight other NGINX CVEs, including CVE-2026-118899 (TLS 1.
 
 - Any NGINX in the affected range **with HTTP/2 enabled on a listener an attacker can reach**, behind a CDN or load balancer included (unless that layer terminates HTTP/2 and speaks HTTP/1.1 to NGINX — see Pitfalls).
 - **Every container image built from `nginx:*` before 2026-11-18**, and every image that installs NGINX from a distro repo, until rebuilt on a fixed package.
-- Images that **embed NGINX** without saying so: `bitnami/nginx`, `openresty/*`, ingress controllers (`ingress-nginx/controller`, `nginx/nginx-ingress`), and many application images that ship NGINX as a front proxy.
+- Images that **embed NGINX** without saying so: `bitnami/nginx`, `openresty/*`, **API gateways built on OpenResty (Kong, Apache APISIX)**, ingress controllers (`ingress-nginx/controller`, `nginx/nginx-ingress`), Chainguard / Wolfi images with the `nginx-mainline` package, and many application images that ship NGINX as a front proxy.
 
 ### What is NOT affected
 
@@ -175,7 +176,7 @@ for q in "image: nginx" "nginx:1." "bitnami/nginx" "openresty" "ingress-nginx" \
          "nginx-ingress" "ingressClassName: nginx" "kubernetes.io/ingress.class: nginx" "use-http2"; do
   echo "=== $q ==="
   ghs "$q" --owner "$ORG" | \
-    python3 -c "import json,sys,re; [print(i['repository']['nameWithOwner'],'|',i['path']) for i in json.load(sys.stdin) if not re.search(r'(\.(md|rst|txt)$|(^|/)(tests?|docs?)/)', i['path'])]" | sort -u
+    python3 -c "import json,sys,re; [print(i['repository']['nameWithOwner'],'|',i['path']) for i in json.load(sys.stdin) if not re.search(r'(\.(md|rst|txt|json|cs|go|py|js|ts)$|(^|/)(tests?|testdata|fixtures|__tests__|docs?)/)', i['path'])]" | sort -u
 done | tee "$LOG_DIR/manifest-hits.txt"
 ```
 
@@ -259,8 +260,18 @@ A vulnerable version is exploitable through these CVEs only if HTTP/2 is on. Rea
 
 **3a. HTTP/2 listeners**
 
+Run `-T` with the **running master's own binary and arguments** — the binary is often not on `PATH` (OpenResty, Kong) and the master may run with a custom prefix (`-p /kong_prefix/ -c nginx.conf`), so a bare `nginx -T` either fails or reads the wrong file:
+
 ```bash
-kubectl exec -n <ns> <pod> -- sh -c 'nginx -T 2>/dev/null || openresty -T 2>/dev/null' > "$LOG_DIR/<ns>_<pod>_nginx-T.conf"
+kubectl exec -n <ns> <pod> -c <container> -- sh -c '
+for p in /proc/[0-9]*; do
+  set -- $(tr "\0" " " < $p/cmdline 2>/dev/null)
+  [ "$1 $2 $3" = "nginx: master process" ] || continue
+  shift 3; bin=$1; shift
+  args=$(echo "$@" | sed -E "s/-g [^;]*;//; s/ -e [^ ]+//")
+  echo "# running: $bin $args -T" >&2
+  $bin $args -T 2>&1; break
+done' > "$LOG_DIR/<ns>_<pod>_nginx-T.conf"
 
 python3 - "$LOG_DIR/<ns>_<pod>_nginx-T.conf" <<'EOF'
 import re, sys
@@ -390,4 +401,11 @@ Record one row per NGINX deployment (`$LOG_DIR/evidence-repos.csv`):
 - **`http2` in a path or comment is not HTTP/2.** A grep for the bare word matches `location /http2/` and `# listen 443 ssl http2;`. The 3a script strips comments and only matches `http2 on;` and `listen … http2`.
 - **Directives don't have to start a line.** `server { listen 443 ssl; http2 on; … }` on one line is valid NGINX. A line-anchored regex (`^\s*http2 on`) missed it in the dry run; 3a matches after `;`, `{` or `}` too.
 - **A reload is not a restart.** `nginx -s reload` re-reads config but keeps the old binary. After a package upgrade on a host, restart the service.
+- **Always pass `--context` explicitly.** The current kube context may not be the cluster you think it is — in the dry run it was a production context while the test targeted staging. Every `kubectl` call should name its context.
+- **Private registries need credentials for 2a.** Images in a private registry (e.g. `ghcr.io/<org>/…`) come back `UNREADABLE` without `crane auth login` / `docker login`. Don't skip them — resolve via 2b.
+- **Code search returns test fixtures.** In the dry run, `nginx:1.` matched JSON fixtures and `testdata/` manifests in a scanner's test suite. 1b drops `testdata`, `fixtures` and source-code files; review what is left.
+- **Kong and APISIX are OpenResty.** In the dry run, Kong gateway pods ran OpenResty 1.19.9.1 and 1.15.8.3 — NGINX cores 1.19.9 and 1.15.8, both vulnerable — under an image named `kong`. The binary is `/usr/local/openresty/nginx/sbin/nginx`, not on `PATH`, and its process name is still `nginx`, so 2b finds it while a name-based search would not.
+- **Bare `nginx -T` reads the wrong config, or none.** On Kong, `nginx -T` exited 127 (not on `PATH`); even with the full path it would read the default config instead of `/kong_prefix/nginx.conf`. The 3a command re-runs the master's own binary with its own `-p` / `-c` arguments.
+- **Wolfi / Chainguard ship `nginx-mainline`.** The dry-run frontend had `nginx-mainline-1.31.8-r1` (apk), no `NGINX_VERSION` in the image. 2b's `apk info -v | grep ^nginx` catches it.
+- **A pod restarted after disclosure lights up 4d.** Its whole webroot (`/usr/share/nginx/html/assets/*.js`, `nginx.pid`) has a fresh mtime and may be owned by the worker user. Compare file times with the container start (`kubectl get pod -o jsonpath='{.status.containerStatuses[*].state.running.startedAt}'`) and look for files written **after** it, or for scripts / executables outside the deployed assets.
 - **The ingress controller is often someone else's.** Workloads behind an NGINX ingress inherit its exposure even if they don't run NGINX themselves. Find the controller (1c) and its owner.
