@@ -29,6 +29,29 @@ Each playbook produces:
 
 ## Compromises
 
+### nginx2root — NGINX HTTP/2 Unauthenticated RCE — CVE-2026-123007, CVE-2026-123633 (November 18, 2026)
+
+Two memory-safety flaws in NGINX's **HTTP/2 module** let an unauthenticated
+attacker run code as the NGINX worker: a flow-control memory corruption that needs
+only HTTP/2 (CVE-2026-123007, public Rapid7 PoC) and a use-after-free when NGINX
+proxies HTTP/2 traffic to a backend (CVE-2026-123633). Both CVSS 4.0 9.2. Affects
+NGINX **1.9.5 – 1.31.8**; fixed in **1.30.7 / 1.31.9** (Plus 37.0.8.1 / 37.3.0.1,
+F5 NGINX Ingress Controller 5.8.0). Community **ingress-nginx will not be patched**.
+Exploitable only with **HTTP/2 enabled**. No in-the-wild exploitation at disclosure.
+NGINX lives in **container images, ingress controllers and hosts**, so manifest
+scanning won't see it.
+
+- [Playbook](nginx2root/playbook.md): org-wide discovery of NGINX in Dockerfiles,
+  manifests, ingress controllers and running pods; version resolution from the image
+  config (`NGINX_VERSION`) or the running binary, with a classifier that handles
+  OpenResty and distro builds; an HTTP/2 / proxying check from the configuration
+  NGINX actually loaded (`nginx -T`); behavioral compromise review (worker child
+  processes, worker crashes, traffic shape); and patch/workaround guidance. Dry-run:
+  image configs of six NGINX-family images, the classifier on 12 version strings and
+  the HTTP/2 check on four config shapes, all with the expected result
+
+---
+
 ### Java4Shell — OpenJDK Base64 intrinsic heap overflow, CVE-2026-114938 (November 17, 2026)
 
 A wrong store mask in HotSpot's **x86-64 AVX-512 VBMI Base64 decode intrinsic**
