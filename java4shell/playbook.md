@@ -45,7 +45,10 @@ Report **one** overall verdict. Check them in this order and report the first th
 3. **inconclusive:** a workload or host listed in scope has no usable result. That covers a check file that is missing, an `EXEC_FAILED` line with no image result for that workload, or `REVIEW_NOT_HOTSPOT` / `REVIEW_VERSION`.
 4. **no_indicators:** every JVM in scope reports `NOT_AFFECTED`, `NOT_EXPOSED_ARCH`, `MITIGATED_BY_FLAG` or `NO_JVM`, and there is no JVM crash since 2026-11-17. This covers only the inspected evidence. It doesn't guarantee that a live environment is safe.
 
-In the limitations, name every workload or host you could not check, using its name as written in the evidence (for example `jenkins-0` or `jira-01`). Quote lines exactly as they appear, without shortening or ellipses.
+Keep the result short so it fits in one response:
+- **Evidence:** at most 3 quotes. Each is a short exact substring of a line, such as `verdict=EXPOSED` or the crash banner. Copy the characters exactly; never paraphrase or use ellipses.
+- **Limitations:** at most 3, one sentence each. Name every in-scope workload or host you could not check, using its name as written in the evidence (for example `jenkins-0` or `jira-01`). Don't list evidence types that belong to another environment, such as `host-check.txt` in a Kubernetes review.
+- **Explanation:** always include one, in 2–3 sentences.
 
 ---
 
