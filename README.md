@@ -29,6 +29,34 @@ Each playbook produces:
 
 ## Compromises
 
+### Java4Shell — OpenJDK Base64 intrinsic heap overflow, CVE-2026-114938 (November 17, 2026)
+
+A wrong store mask in HotSpot's **x86-64 AVX-512 VBMI Base64 decode intrinsic**
+lets attacker-supplied Base64 (`64 × "A"` + `=`) write past a heap array once C2
+has compiled the decoder. Calif demonstrated **pre-auth RCE** in default Keycloak,
+Jira, Confluence, Artifactory, Jenkins and PingFederate, and post-auth RCE in
+Kafka, Solr, Elasticsearch, Gerrit and Spinnaker. A client-side TLS variant also
+exists. Affects HotSpot **17.0.6+, 21, 25 and 27** before **17.0.21.1 / 21.0.13.1
+/ 25.0.5.1 / 27.0.1.1**, and every non-LTS line from 18 onward (no fix). Exposure
+also needs an AVX-512 VBMI CPU (Ice Lake / Sapphire Rapids and later, AMD Zen 4+).
+ARM64 is not affected. Workaround: `-XX:-UseBASE64Intrinsics`. The runtime lives
+in **container base images and bundled product JDKs**, so manifest scanning won't
+see it.
+
+- [Playbook](java4shell/playbook.md): org-wide discovery of Java base images, Java
+  SDLC products and VMs, plus one `java4shell-check.sh`. The script runs inside an
+  image, a live container or a host and decides each JVM's verdict from the version
+  it actually runs (`jcmd VM.version`), HotSpot vs OpenJ9, CPU flags, and the
+  `UseBASE64Intrinsics` / `UseAVX` values in effect with their origin. That catches
+  `JAVA_TOOL_OPTIONS`, start-script variables and `_JAVA_OPTIONS` overrides. It also
+  covers JVM-crash hunting since disclosure, secret rotation, and patch/workaround
+  guidance. Dry-run against Temurin 11/17/21 (amd64 + arm64), Corretto 21, Semeru 21,
+  distroless Java 21 and live Jenkins LTS JVMs: 20 image and runtime cases, all with
+  the expected result (including an arm64 JVM that refuses to start with
+  `-XX:UseAVX=2`)
+
+---
+
 ### wfx-loot / WFX Phantom — hijacked GitHub accounts push a self-erasing CI secret stealer (November 10, 2026 – ongoing)
 
 Stolen GitHub tokens from about **4,800 accounts** were used to push a ~1,500-line
