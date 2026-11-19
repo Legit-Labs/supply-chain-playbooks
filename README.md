@@ -29,6 +29,35 @@ Each playbook produces:
 
 ## Compromises
 
+### Microsoft agent-framework — hijacked PyPI releases 1.26.1 / 1.26.2 steal CI/CD secrets and Azure tokens (November 17, 2026)
+
+Two malicious releases of Microsoft's official **`agent-framework`** meta-package
+(~190K downloads/month) were uploaded through the project's legitimate PyPI
+publisher: **`1.26.1`** (20:35–21:06 UTC) and **`1.26.2`** (21:08–21:16 UTC, two
+minutes after the first was quarantined). A `.pth` startup hook
+(`agent_framework_meta.pth` / `af_runtime_diag.pth`) runs a credential stealer on
+**every Python start**, even if the package is never imported: environment secrets,
+credential files, other processes' `/proc/*/environ`, and **freshly minted tokens**
+— Azure managed identity (IMDS), Azure DevOps OIDC and, in 1.26.2, GitHub Actions
+OIDC for `api://AzureADTokenExchange` — sent to a `webhook.site` endpoint. The
+wheels pull in the genuine `agent-framework-core` 1.26.0, so nothing breaks.
+`agent-framework-core` and the other `agent-framework-*` packages are not affected;
+1.26.0 is the last clean release.
+
+- [Playbook](agent_framework_pypi/playbook.md): org-wide discovery of the
+  meta-package (both `agent-framework` / `agent_framework` spellings, bump PRs),
+  CI log scan for GitHub Actions and Azure DevOps with exact-version matching that
+  excludes `agent-framework-core`, shell-only host / image / pip-uv-poetry cache
+  check (never run Python or pip on a suspect host), federated-credential and
+  Entra sign-in-log blast radius for the minted OIDC and managed identity tokens,
+  and ordered remediation. Dry-run: bash syntax of every block; the version
+  classifier on 12 installer-output lines (pip, uv, poetry, `-core`, `1.26.10`,
+  `rc`/`post`) and the manifest grep on 9 shapes, all with the expected result;
+  the pip and uv cache checks against a real local cache; Phase 1 search against
+  two GitHub orgs with positive controls
+
+---
+
 ### nginx2root — NGINX HTTP/2 Unauthenticated RCE — CVE-2026-123007, CVE-2026-123633 (November 18, 2026)
 
 Two memory-safety flaws in NGINX's **HTTP/2 module** let an unauthenticated
