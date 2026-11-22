@@ -29,6 +29,33 @@ Each playbook produces:
 
 ## Compromises
 
+### WPPConnect — malicious @wppconnect-team/wppconnect 2.4.1, @wppconnect/server 2.10.82 and Docker images steal secrets and WhatsApp sessions (November 15–16, 2026)
+
+Unsigned commits pushed straight to the default branches of the **WPPConnect**
+WhatsApp Web automation project (~7.5K weekly downloads for the library) were
+released by the project's own workflows: **`@wppconnect-team/wppconnect` 2.4.1**
+(npm trusted publishing, valid provenance pointing at the malicious commit),
+**`@wppconnect/server` 2.10.82**, the **`wppconnect/wppconnect-server` Docker Hub
+images** (including `latest`, `2` and `2.10` for about an hour) and the library's
+`nightly` GitHub release. The payload runs when the library is imported or the
+server starts — no install script — and uploads environment variables, `.env` /
+config files and WhatsApp session tokens to a Telegram bot, once a day per host.
+The library payload also runs in CI; the server payload skips CI runners. The
+server's `^2.3.6` range pulled library 2.4.1 transitively. Last clean versions:
+2.4.0 and 2.10.81.
+
+- [Playbook](wppconnect_supply_chain/playbook.md): org-wide discovery of both
+  packages, the Docker image and the nightly tarball; per-run resolution from the
+  lock file at the run's commit (npm logs don't print versions) with the CI-skip
+  difference between the two payloads; shell-only host, container and Kubernetes
+  check by payload hash, execution marker and image digest / ID; blast radius
+  including WhatsApp session takeover; and ordered remediation. Dry-run: bash
+  syntax of every block; the lock-file parser on npm v1 / v3, Yarn 1, Yarn Berry
+  and pnpm lock files; the version pattern on 12 strings and the install-step
+  pattern on 11, all with the expected result
+
+---
+
 ### Microsoft agent-framework — hijacked PyPI releases 1.26.1 / 1.26.2 steal CI/CD secrets and Azure tokens (November 17, 2026)
 
 Two malicious releases of Microsoft's official **`agent-framework`** meta-package
