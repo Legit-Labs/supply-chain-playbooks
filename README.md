@@ -29,6 +29,33 @@ Each playbook produces:
 
 ## Compromises
 
+### Drupal Core Installer RCE — CVE-2026-132165, SA-CORE-2026-017 (November 18, 2026, exploited from November 19)
+
+Under specific conditions an anonymous attacker can use Drupal's installer,
+`core/install.php`, to **reinstall Drupal on a site that is already installed**,
+which leads to site takeover or remote code execution. Drupal rates it **Highly
+critical**; CISA added it to KEV on 2026-11-24. Drupal's fix shows the root cause:
+when the installer's check for existing tables failed, it treated the site as not
+installed, and it could make `settings.php` writable on its own. Affects
+**`drupal/core` < 10.6.22, 11.0.0 – 11.3.21 and 11.4.0 – 11.4.12**; fixed in
+**10.6.22, 11.3.22 and 11.4.13**. 11.0 – 11.2 and 10.5 and older are end of life.
+Exploitation on live sites reported from **2026-11-19 19:00 UTC**. No IOCs
+published.
+
+- [Playbook](drupal_core_installer_rce/playbook.md): org-wide discovery from
+  `composer.lock` (with the locked `drupal/core` version), deployment files and
+  running pods; a read-only `drupal-check.php` that reads the running version, checks
+  whether the web server user can change `settings.php`, and looks in each site's
+  database for a reinstall (`install_time`) or a new administrator; installer
+  reachability check; request-log and file review; and remediation with tested
+  nginx / Apache blocks. Dry-run: the check script against `drupal:11.3.21` with
+  SQLite (fresh install, hardened `settings.php` ownership, unreachable database,
+  password never printed); installer status codes and URL variants before and after
+  the Apache block; the nginx prefix and exact-match rules; the access-log pattern
+  on 14 request shapes; the `composer.lock` reader against a public repository
+
+---
+
 ### WPPConnect — malicious @wppconnect-team/wppconnect 2.4.1, @wppconnect/server 2.10.82 and Docker images steal secrets and WhatsApp sessions (November 15–16, 2026)
 
 Unsigned commits pushed straight to the default branches of the **WPPConnect**
