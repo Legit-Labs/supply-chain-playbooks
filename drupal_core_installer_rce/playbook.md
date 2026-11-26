@@ -1,6 +1,6 @@
-# Drupal Core Installer RCE (CVE-2026-132165, SA-CORE-2026-017) — Detection & Response Playbook
+# Drupal Core Installer Takeover (CVE-2026-132165 / SA-CORE-2026-017, CVE-2026-136716 / SA-CORE-2026-019) — Detection & Response Playbook
 
-> **Note for AI agents:** This playbook looks for a **vulnerable deployed site** and for **signs that a site was taken over**. It is not about a poisoned package. No exposure window applies: an unpatched site can be attacked **now**. On Drupal 8 and later, core is normally installed with Composer, so `composer.lock` tells you which version a repository **builds**. It does not tell you what is **running**. The check script below reads the version from the running site, checks whether the web server can change `settings.php`, and looks in each site's database for a reinstall or a new administrator. Adapt the discovery searches to wherever your org keeps code and deployments. The detection logic is the same on any platform. Send only `GET` requests to the installer. Never submit an installer form.
+> **Note for AI agents:** This playbook looks for a **vulnerable deployed site** and for **signs that a site was taken over**. It is not about a poisoned package. No exposure window applies: an unpatched site can be attacked **now**. On Drupal 8 and later, core is normally installed with Composer, so `composer.lock` tells you which version a repository **builds**. It does not tell you what is **running**. This playbook covers **two advisories** on the same installer: the 2026-11-18 fix (SA-CORE-2026-017) left some sites open, and the 2026-11-25 fix (SA-CORE-2026-019) closes that gap. Only **10.6.23, 11.3.23, 11.4.14** or later on a branch fix both. The check script below reads the version from the running site, checks whether the web server can change `settings.php`, and looks in each site's database for a reinstall, a changed user 1 account or a new administrator. Adapt the discovery searches to wherever your org keeps code and deployments. The detection logic is the same on any platform. Send only `GET` requests to the installer. Never submit an installer form.
 
 ## Variables — Fill These In First
 
@@ -8,8 +8,9 @@
 # Your GitHub organization name
 export ORG="your-org-name"
 
-# Drupal published the advisory and the fixed releases on this date. Drupal reports
-# exploitation on live sites from 2026-11-19 19:00 UTC. Review everything since disclosure.
+# Drupal published the first advisory (SA-CORE-2026-017) on this date. Drupal reports exploitation on
+# live sites from 2026-11-19 19:00 UTC; the follow-up (SA-CORE-2026-019, 2026-11-25) is also exploited.
+# Review everything since the first disclosure.
 export SINCE="2026-11-18T00:00:00Z"
 
 export LOG_DIR="/tmp/supply-chain-scan-drupal-installer"
@@ -24,7 +25,7 @@ If you were given evidence files instead of a shell, don't run the commands belo
 
 | Evidence file | Produced by |
 |---|---|
-| `inventory.txt` | Phase 1: which Drupal sites are in scope, and when each was first installed |
+| `inventory.txt` | Phase 1: which Drupal sites are in scope, when each was first installed, and when it was last upgraded |
 | `check-results.txt` | Phase 2: one `verdict=` line per site from `drupal-check.php` (Kubernetes lines start with `namespace/pod/container`) |
 | `host-check.txt` | Phase 2: `drupal-check.php` output from a VM or host |
 | `installer-reachability.txt` | Phase 3: HTTP status of the installer URLs for each public hostname |
@@ -32,15 +33,15 @@ If you were given evidence files instead of a shell, don't run the commands belo
 
 Report **one** overall verdict. Check them in this order and report the first that matches:
 
-1. **compromise:** a site reports `verdict=REINSTALLED` or `verdict=NEW_ADMIN`, and `inventory.txt` does not say that the site was installed, or that administrator was created, on purpose on or after 2026-11-18. Quote the `verdict=` line. Follow Phase 4d.
+1. **compromise:** a site reports `verdict=REINSTALLED`, `verdict=UID1_CHANGED` or `verdict=NEW_ADMIN`, and `inventory.txt` does not say that this change was made on purpose on or after 2026-11-18 (the site was installed, user 1 was edited or its password reset, or that administrator was created). Quote the `verdict=` line. Follow Phase 4d.
 2. **exposure:** a site reports `verdict=VULNERABLE` or `verdict=EOL`, or reports `verdict=DB_UNCHECKED` with `status=VULNERABLE` or `status=EOL`. Quote the `verdict=` line. For a `DB_UNCHECKED` site, also list it as a limitation, because its database was not checked for a takeover. An installer that answers `200` makes the site more urgent, but a blocked installer (`403`/`404`) does not make an affected version safe.
-3. **inconclusive:** a site listed in `inventory.txt` has no usable result. That covers a missing check line, `verdict=EXEC_FAILED`, `REVIEW_VERSION`, `REVIEW_NO_SETTINGS`, and `DB_UNCHECKED` with `status=FIXED` (the site may have been taken over before it was patched).
+3. **inconclusive:** a site listed in `inventory.txt` has no usable result. That covers a missing check line, `verdict=EXEC_FAILED`, `REVIEW_VERSION`, `REVIEW_NO_SETTINGS`, `DB_UNCHECKED` with `status=FIXED` (the site may have been taken over before it was patched), and `REVIEW_INSTALL_TIME` unless `inventory.txt` shows the site was upgraded on the same day as its `install_time` (then treat it by its `status=`).
 4. **no_indicators:** every site in scope reports `verdict=FIXED`. This covers only the inspected evidence. It doesn't guarantee that a live environment is safe.
 
 Requests to the installer in `access.log` are **not** compromise on their own. On an installed site the installer answers `200` with a "Drupal already installed" page. Mention installer requests from untrusted clients as context, not as the verdict.
 
 Keep the result short so it fits in one response:
-- **Evidence:** at most 3 quotes. Each is a short exact substring of a line, such as `verdict=REINSTALLED` or `verdict=VULNERABLE`. Copy the characters exactly; never paraphrase or use ellipses.
+- **Evidence:** at most 3 quotes. Each is a short exact substring of a line, such as `verdict=UID1_CHANGED` or `verdict=VULNERABLE`. Copy the characters exactly; never paraphrase or use ellipses.
 - **Limitations:** at most 3, one sentence each. Name every in-scope site or host you could not check, using its name as written in the evidence (for example `drupal-web-0` or `www-01`). Don't list evidence types that belong to another environment, such as `host-check.txt` in a Kubernetes review.
 - **Explanation:** always include one, in 2–3 sentences.
 
@@ -48,9 +49,13 @@ Keep the result short so it fits in one response:
 
 ## Background
 
-**CVE-2026-132165**, Drupal advisory **SA-CORE-2026-017**, rated **Highly critical** by the Drupal Security Team. Found by Anthropic's OSS Scanner. CISA added it to the Known Exploited Vulnerabilities catalog on **2026-11-24** (federal due date 2026-11-27, forensic triage required).
+**CVE-2026-132165**, Drupal advisory **SA-CORE-2026-017** (2026-11-18), rated **Highly critical** by the Drupal Security Team. Found by Anthropic's OSS Scanner. CISA added it to the Known Exploited Vulnerabilities catalog on **2026-11-24** (federal due date 2026-11-27, forensic triage required).
+
+**CVE-2026-136716**, Drupal advisory **SA-CORE-2026-019** (2026-11-25), a follow-up on the same installer. Drupal says it **is being exploited in the wild**, and that sites patched for SA-CORE-2026-017 can still be taken over.
 
 Drupal ships an installer, `core/install.php`. Under specific conditions an anonymous attacker can use it to **reinstall Drupal on a site that is already installed**. That leads to a site takeover or remote code execution. Drupal says only some configurations are exploitable, and that some (not all) attack paths are blocked when the web server cannot write to or change permissions on `settings.php`.
+
+### SA-CORE-2026-017
 
 Drupal's fix (the same change in 10.6.22, 11.3.22 and 11.4.13, in `core/includes/install.core.inc`) shows the root cause:
 
@@ -58,19 +63,33 @@ Drupal's fix (the same change in 10.6.22, 11.3.22 and 11.4.13, in `core/includes
 - The installer could also **fix `settings.php` permissions on its own** to make the file writable. The fix turns that off.
 - The fix refuses to continue once an installation has finished (`install_time` is set), and binds an installation to the browser session that started it.
 
-Exploitation reported on live sites from **2026-11-19 19:00 UTC**. Drupal has not published attacker IPs, file names or log patterns.
+Exploitation reported on live sites from **2026-11-19 19:00 UTC**.
+
+### SA-CORE-2026-019
+
+Drupal says that "certain sites in unusual or incomplete install states remain vulnerable to site takeover" after SA-CORE-2026-017, "including production sites", that the user interface does not show whether a site is in that state, and that a site that was already taken over may no longer be in it. Any site that left its installer reachable after SA-CORE-2026-017 may have been compromised.
+
+The fix (10.6.23, 11.3.23, 11.4.14) shows what "incomplete" means:
+
+- Drupal records installer progress in the state values `install_task` (`done` when finished) and `install_time`. The 11.3.22 check only refused to run when `install_task` was `done`, or when a task was recorded **and** `install_time` was set. A site with an unfinished task and no `install_time` could still be driven through the remaining installer steps.
+- The fix also refuses an interactive installer request on such a site unless the browser holds the installation's session token.
+- A new update hook, `system_post_update_mark_installation_finished`, sets `install_task` to `done` and fills in `install_time` on sites where they are missing. It runs when you apply database updates after upgrading.
+
+Drupal's advice for this advisory centers on **user 1**: check the logs for unexpected changes to or by the user 1 account, make sure its email address is one you control, and consider resetting its password. The installer's site configuration step is where an administrator's name, email and password are set.
+
+Drupal has not published attacker IPs, file names or log patterns for either advisory.
 
 ### Affected / Fixed
 
-| Branch | Affected | Fixed |
+| Branch | SA-CORE-2026-017 fixed in | SA-CORE-2026-019 fixed in (use this) |
 |---|---|---|
-| 11.4 | 11.4.0 to 11.4.12 | **11.4.13** |
-| 11.3 | 11.3.0 to 11.3.21 | **11.3.22** |
-| 11.0 to 11.2 | all | none (end of life): move to 11.3.22 or 11.4.13 |
-| 10.6 | 10.6.0 to 10.6.21 | **10.6.22** |
-| 10.5 and older, 9, 8 | all | none (end of life): move to 10.6.22 or later |
+| 11.4 | 11.4.13 | **11.4.14** |
+| 11.3 | 11.3.22 | **11.3.23** |
+| 11.0 to 11.2 | none (end of life) | none: move to 11.3.23 or 11.4.14 |
+| 10.6 | 10.6.22 | **10.6.23** |
+| 10.5 and older, 9, 8 | none (end of life) | none: move to 10.6.23 or later |
 
-The same ranges as Composer constraints (Drupal's advisory database): `<10.6.22 || >=11.0.0 <11.3.22 || >=11.4.0 <11.4.13`. Pre-releases outside these ranges, such as 11.5.0-beta1 and 12.0.0-beta2, are not listed as affected.
+The fixed releases came out on 2026-11-18 and 2026-11-25. As Composer constraints (Drupal's advisory database), SA-CORE-2026-017 affects `<10.6.22 || >=11.0.0 <11.3.22 || >=11.4.0 <11.4.13`, and SA-CORE-2026-019 affects `<10.6.23 || >=11.0.0 <11.3.23 || >=11.4.0 <11.4.14`. **A site on 10.6.22, 11.3.22 or 11.4.13 is still affected.** Pre-releases outside these ranges, such as 11.5.0-beta1 and 12.0.0-beta2, are not listed as affected.
 
 ### What IS affected
 
@@ -79,11 +98,12 @@ The same ranges as Composer constraints (Drupal's advisory database): `<10.6.22 
 
 ### What is NOT affected
 
-- Sites on 10.6.22, 11.3.22, 11.4.13 or later on their branch.
+- Sites on 10.6.23, 11.3.23, 11.4.14 or later on their branch, with database updates applied.
+- Per Drupal, sites that have already **secured the installer** (blocked `install.php`) are not vulnerable to SA-CORE-2026-019. That doesn't clear them for the time before the block went in.
 - **`@drupal/*` and `drupal-*` npm packages** (`@drupal/once`, `drupal-attribute`, `drupal-bootstrap` and similar). They are JavaScript used by themes and front-end builds. They don't contain the PHP installer. At most they hint that a Drupal site exists nearby.
 - **Contrib modules and themes** (`drupal/<module>` in `composer.json`). They are not core. Their presence means a Drupal site exists; the `drupal/core` version decides exposure.
 - **Drupal 7.** It is not in the advisory's version data and is end of life since 2025-01-05. Plan its replacement regardless.
-- Sites protected by **Drupal Steward** are protected from the known attack vectors. Drupal still asks them to upgrade.
+- Sites protected by **Drupal Steward** are protected from the known attack vectors of both advisories. Drupal still asks them to upgrade.
 
 ---
 
@@ -108,11 +128,11 @@ def status(v):
         t = tuple(int(p) for p in v.lstrip("v").split("-")[0].split(".")[:3])
     except ValueError:
         return "REVIEW_VERSION"
-    if t < (10,6,22): return "EOL" if t < (10,6,0) else "VULNERABLE"
+    if t < (10,6,23): return "EOL" if t < (10,6,0) else "VULNERABLE"
     if t < (11,0,0): return "FIXED"
-    if t < (11,3,22): return "EOL" if t < (11,3,0) else "VULNERABLE"
+    if t < (11,3,23): return "EOL" if t < (11,3,0) else "VULNERABLE"
     if t < (11,4,0): return "FIXED"
-    if t < (11,4,13): return "VULNERABLE"
+    if t < (11,4,14): return "VULNERABLE"
     return "FIXED"
 for p in json.load(sys.stdin).get("packages", []):
     if p["name"] == "drupal/core":
@@ -151,7 +171,7 @@ kubectl get pods -A -o jsonpath='{range .items[*]}{range .spec.containers[*]}{$.
 
 Custom images often have neither word in their name. Add the workloads that Phases 1a and 1b point to.
 
-Record every site in `$LOG_DIR/inventory.txt`, with its public hostname and, if you know it, when it was first installed. You need that date to read a `REINSTALLED` result in Phase 2.
+Record every site in `$LOG_DIR/inventory.txt`, with its public hostname and, if you know them, when it was first installed and when it was last upgraded. You need those dates to read a `REINSTALLED` result in Phase 2.
 
 Classify each hit:
 
@@ -169,14 +189,14 @@ All of Phase 2 uses one read-only script, `drupal-check.php`. It runs where the 
 
 - the core version read from `core/lib/Drupal.php`, and its status;
 - whether the user running the web server or PHP owns `settings.php` or its directory (`settings_web_writable=yes` means it can change the file's permissions);
-- from the site's own database: `install_time` (set when an installation finishes, so a reinstall moves it), user 1, administrators created since `$SINCE`, and the site name.
+- from the site's own database: `install_time` (set when an installation finishes, so a reinstall moves it), `install_task` and whether the install state is `complete` (SA-CORE-2026-019 targets `incomplete` ones), user 1's name, email and last change time, administrators created since `$SINCE`, and the site name.
 
 It never prints database passwords and never writes anything.
 
 ```bash
 cat > "$LOG_DIR/drupal-check.php" <<'EOF'
 <?php
-// Read-only check for Drupal SA-CORE-2026-017 / CVE-2026-132165.
+// Read-only check for Drupal SA-CORE-2026-017 (CVE-2026-132165) and SA-CORE-2026-019 (CVE-2026-136716).
 // Run where the site's PHP runs:  php drupal-check.php [drupal_web_root ...]
 //                             or: php -- [drupal_web_root ...] < drupal-check.php
 // Prints one "verdict=" line per site. Never prints database passwords.
@@ -208,11 +228,11 @@ foreach (glob('/proc/[0-9]*/status') ?: [] as $s) {
 
 function core_status(string $v): string {
   if (!preg_match('/^\d+\.\d+\.\d+/', $v)) return 'REVIEW_VERSION';
-  if (version_compare($v, '10.6.22', '<')) return version_compare($v, '10.6.0', '<') ? 'EOL' : 'VULNERABLE';
+  if (version_compare($v, '10.6.23', '<')) return version_compare($v, '10.6.0', '<') ? 'EOL' : 'VULNERABLE';
   if (version_compare($v, '11.0.0', '<')) return 'FIXED';
-  if (version_compare($v, '11.3.22', '<')) return version_compare($v, '11.3.0', '<') ? 'EOL' : 'VULNERABLE';
+  if (version_compare($v, '11.3.23', '<')) return version_compare($v, '11.3.0', '<') ? 'EOL' : 'VULNERABLE';
   if (version_compare($v, '11.4.0', '<')) return 'FIXED';
-  if (version_compare($v, '11.4.13', '<')) return 'VULNERABLE';
+  if (version_compare($v, '11.4.14', '<')) return 'VULNERABLE';
   return 'FIXED';
 }
 
@@ -280,7 +300,11 @@ foreach ($roots as $root) {
     $fields = "site=$root/$site_path version=$version status=$status installer_file=$installer settings_owner=$owner web_user=$web_users settings_web_writable=$writable settings_mtime=$settings_mtime";
     $db_state = 'ok';
     $install_time = null;
+    $install_task = 'unknown';
     $uid1 = 'unknown';
+    $uid1_mail = 'unknown';
+    $uid1_created = null;
+    $uid1_changed = null;
     $new_admins = [];
     $site_name = 'unknown';
     $db_host = 'unknown';
@@ -310,8 +334,17 @@ foreach ($roots as $root) {
       $raw = $q->fetchColumn();
       $install_time = $raw === false ? null : (int) unserialize($raw, ['allowed_classes' => false]);
 
-      $q = $pdo->query("SELECT name, created FROM {$prefix}users_field_data WHERE uid = 1");
-      if ($r = $q->fetch(PDO::FETCH_ASSOC)) $uid1 = $r['name'] . '@' . iso((int) $r['created']);
+      $q = $pdo->query("SELECT value FROM {$prefix}key_value WHERE collection = 'state' AND name = 'install_task'");
+      $raw = $q->fetchColumn();
+      $install_task = $raw === false ? 'none' : (string) unserialize($raw, ['allowed_classes' => false]);
+
+      $q = $pdo->query("SELECT name, mail, created, changed FROM {$prefix}users_field_data WHERE uid = 1");
+      if ($r = $q->fetch(PDO::FETCH_ASSOC)) {
+        $uid1 = $r['name'] . '@' . iso((int) $r['created']);
+        $uid1_mail = $r['mail'] ?: 'none';
+        $uid1_created = (int) $r['created'];
+        $uid1_changed = (int) $r['changed'];
+      }
 
       $q = $pdo->prepare("SELECT u.name, u.created FROM {$prefix}users_field_data u JOIN {$prefix}user__roles r ON r.entity_id = u.uid WHERE r.roles_target_id = 'administrator' AND u.created >= ?");
       $q->execute([$since]);
@@ -334,11 +367,18 @@ foreach ($roots as $root) {
       $db_state = 'ERROR(' . preg_replace('/\s+/', ' ', substr(get_class($e) . ': ' . $e->getMessage(), 0, 120)) . ')';
     }
 
-    if ($install_time !== null && $install_time >= $since) {
+    $recent_install = $install_time !== null && $install_time >= $since;
+    if ($recent_install && $uid1_created !== null && $uid1_created >= $since) {
       $verdict = 'REINSTALLED';
+    }
+    elseif ($uid1_changed !== null && $uid1_changed >= $since) {
+      $verdict = 'UID1_CHANGED';
     }
     elseif ($new_admins) {
       $verdict = 'NEW_ADMIN';
+    }
+    elseif ($recent_install) {
+      $verdict = 'REVIEW_INSTALL_TIME';
     }
     elseif ($db_state !== 'ok') {
       $verdict = 'DB_UNCHECKED';
@@ -346,7 +386,8 @@ foreach ($roots as $root) {
     else {
       $verdict = $status;
     }
-    echo "verdict=$verdict $fields db=$db_state db_host=$db_host install_time=" . iso($install_time) . " uid1=$uid1 site_name=$site_name new_admins=[" . implode(' ', $new_admins) . "]\n";
+    $install_state = $db_state !== 'ok' ? 'unknown' : (($install_task === 'done' && $install_time) ? 'complete' : 'incomplete');
+    echo "verdict=$verdict $fields db=$db_state db_host=$db_host install_time=" . iso($install_time) . " install_task=$install_task install_state=$install_state uid1=$uid1 uid1_mail=$uid1_mail uid1_changed=" . iso($uid1_changed) . " site_name=$site_name new_admins=[" . implode(' ', $new_admins) . "]\n";
   }
 }
 EOF
@@ -380,9 +421,11 @@ Use the user the site's PHP runs as (or root), so the script can read `settings.
 
 | `verdict` | Meaning | Action |
 |---|---|---|
-| `REINSTALLED` | `install_time` is on or after `$SINCE`: an installation finished on this site since disclosure | Unless you installed this site on purpose after that date, treat it as **taken over**. Go to Phase 4d. |
+| `REINSTALLED` | `install_time` **and** user 1's creation time are on or after `$SINCE`: the site was installed again since disclosure | Unless you installed this site on purpose after that date, treat it as **taken over**. Go to Phase 4d. |
+| `UID1_CHANGED` | The user 1 account was saved on or after `$SINCE` (name, email, password or roles changed) | Check `uid1_mail` and ask the site owner. If nobody changed user 1, treat it as **taken over** (Phase 4d). This is the sign Drupal points to for SA-CORE-2026-019. |
 | `NEW_ADMIN` | An administrator (or user 1) was created on or after `$SINCE` | Confirm with the site owner. If nobody created it, go to Phase 4d. |
-| `VULNERABLE` | Affected version on a supported branch, no takeover signs in the database | Patch now (Phase 5). Check Phase 3 to set the urgency. |
+| `REVIEW_INSTALL_TIME` | `install_time` is on or after `$SINCE`, but user 1 is older and unchanged | Usually the 10.6.23 / 11.3.23 / 11.4.14 update hook filling in a missing `install_time` when database updates ran. If that matches your upgrade time, treat the site by its `status=`. If not, investigate (Phase 4). |
+| `VULNERABLE` | Affected version on a supported branch, no takeover signs in the database | Patch now (Phase 5). Check Phase 3 to set the urgency. `install_state=incomplete` means the site is in the state SA-CORE-2026-019 describes: top priority. |
 | `EOL` | Affected version on an end-of-life branch, no fix exists | Move to a supported branch (Phase 5). Block the installer now. |
 | `DB_UNCHECKED` | The script could not read the site's database (`db=ERROR(...)` says why) | Fix access and run it again. Until then you can't rule out a takeover. |
 | `FIXED` | Patched version, no takeover signs | No action, beyond the Phase 5 hardening. |
@@ -415,7 +458,7 @@ These are plain `GET` requests. Don't send `POST`s and don't step through the in
 
 ## Phase 4 — Look for Exploitation
 
-**4a. Database signs (from Phase 2).** `REINSTALLED` and `NEW_ADMIN` are the strongest signals the playbook has. Also compare the `site_name`, `uid1` and `db_host` fields with what the site owner expects. A different database host in `settings.php` means the site may now be pointed at an attacker's database.
+**4a. Database signs (from Phase 2).** `REINSTALLED`, `UID1_CHANGED` and `NEW_ADMIN` are the strongest signals the playbook has. Check that `uid1_mail` is an address your team controls, as Drupal advises. Also compare the `site_name`, `uid1` and `db_host` fields with what the site owner expects. A different database host in `settings.php` means the site may now be pointed at an attacker's database.
 
 **4b. Request logs since `$SINCE`**
 
@@ -452,8 +495,8 @@ kubectl exec -n <ns> <pod> -c <container> -- sh -c \
 
 1. Take the site offline, or put it in maintenance mode behind a block on all public traffic.
 2. Keep evidence: copy the database, `settings.php`, and the request and PHP logs before you change anything.
-3. Restore from a backup taken **before** the earliest sign (the `install_time` or the new account's creation time), then patch before putting it back online.
-4. Rotate everything the site held: database credentials, `$settings['hash_salt']`, API keys in `settings.php` and in configuration, SMTP and payment credentials, and every administrator password.
+3. Restore from a backup taken **before** the earliest sign (the `install_time`, `uid1_changed` or the new account's creation time), then patch before putting it back online.
+4. Rotate everything the site held: database credentials, `$settings['hash_salt']`, API keys in `settings.php` and in configuration, SMTP and payment credentials, and every administrator password. Set user 1's email to an address you control. Drupal's guide [Your Drupal site got hacked. Now what?](https://www.drupal.org/docs/develop/security/your-drupal-site-got-hacked-now-what) covers the rest.
 5. Treat the host or container as compromised if PHP files were dropped. Rebuild it from a clean image rather than cleaning it.
 
 ---
@@ -462,12 +505,12 @@ kubectl exec -n <ns> <pod> -c <container> -- sh -c \
 
 1. **Upgrade core on its branch** and redeploy:
    ```bash
-   # 11.3 branch (use ~10.6.22 or ~11.4.13 for the other branches)
-   composer require 'drupal/core-recommended:~11.3.22' 'drupal/core-composer-scaffold:~11.3.22' --update-with-all-dependencies
+   # 11.3 branch (use ~10.6.23 or ~11.4.14 for the other branches)
+   composer require 'drupal/core-recommended:~11.3.23' 'drupal/core-composer-scaffold:~11.3.23' --update-with-all-dependencies
    vendor/bin/drush updatedb -y && vendor/bin/drush cache:rebuild   # or run /update.php if Drush isn't installed
    ```
-   Projects that require `drupal/core` directly (not `core-recommended`) upgrade `drupal/core` the same way. Official-image users move to a fixed tag such as `drupal:11.3.22-php8.4-apache` and rebuild with `docker build --pull`.
-2. **End-of-life branches** (11.0 to 11.2, 10.5 and older): there is no patch. Upgrade to 11.3.22, 11.4.13 or 10.6.22. Until then, the installer block below is the only protection.
+   Apply the database updates: the SA-CORE-2026-019 update hook marks unfinished installs as finished. Sites already on 10.6.22, 11.3.22 or 11.4.13 must upgrade again. Projects that require `drupal/core` directly (not `core-recommended`) upgrade `drupal/core` the same way. Official-image users move to a fixed tag such as `drupal:11.3.23-php8.4-apache` and rebuild with `docker build --pull`.
+2. **End-of-life branches** (11.0 to 11.2, 10.5 and older): there is no patch. Upgrade to 11.3.23, 11.4.14 or 10.6.23. Until then, the installer block below is the only protection.
 3. **Block the installer at the web server** (both tested against an affected site):
    ```nginx
    # nginx: prefix match. Don't use "location = /core/install.php": it misses /core/install.php/foo.
@@ -499,9 +542,11 @@ Record one row per Drupal site:
 | Installer reachable (`/core/install.php` status) | 200 / 403 / 404 |
 | `install_time` on or after 2026-11-18? Expected? | |
 | Administrators created since 2026-11-18? Expected? | |
+| `uid1_mail` an address you control? User 1 changed since 2026-11-18? | |
+| `install_state` before upgrading | complete / incomplete |
 | Installer `POST`s in logs since 2026-11-18? | yes / no |
 | PHP files under `sites/*/files`? | list |
-| Upgraded to 10.6.22 / 11.3.22 / 11.4.13? | yes / no |
+| Upgraded to 10.6.23 / 11.3.23 / 11.4.14, database updates applied? | yes / no |
 | Installer blocked at web server? | yes / no |
 | Re-checked after deploy? | yes / no |
 | Secrets rotated? | yes / no / n/a |
@@ -514,6 +559,9 @@ Record one row per Drupal site:
 - **The official Docker image fails the `settings.php` mitigation by default.** In `drupal:11.3.21-php8.4-apache`, `sites/default` and `settings.php` are owned by `www-data`, the Apache user. The file is mode `0444`, but its owner can change that. Changing the file's owner alone isn't enough either: if the directory is still owned by `www-data`, the check still reports `settings_web_writable=yes`.
 - **`location = /core/install.php` in nginx misses `/core/install.php/foo`.** In a test, the exact match returned `404` for the bare path but passed `/install.php/foo` to the PHP handler. Use the `^~` prefix match. It also blocked `%2e`, `//` and `/./` variants.
 - **Deleting `core/install.php` doesn't last.** It ships inside the `drupal/core` package, so every `composer install` or `update` restores it. Composer scaffolding also rewrites `web/.htaccess`, so a block added there by hand can disappear. Put the block in the web server or ingress config.
+- **The first fix is not enough.** 10.6.22, 11.3.22 and 11.4.13 fix SA-CORE-2026-017 only. The check marks them `VULNERABLE`, because SA-CORE-2026-019 needs 10.6.23, 11.3.23 or 11.4.14.
+- **Following Drupal's advice sets off `UID1_CHANGED`.** Resetting user 1's password or changing its email, as SA-CORE-2026-019 recommends, saves the account and moves its change time. Record when you did it in the inventory so the result can be read.
+- **The SA-CORE-2026-019 update hook can move `install_time`.** On a site whose install was never marked finished, applying database updates after upgrading writes the current time into `install_time`. The check reports `REVIEW_INSTALL_TIME` (not `REINSTALLED`) when user 1 is older and unchanged. Compare it with the upgrade time.
 - **`REINSTALLED` on a site you built after 2026-11-18 is expected.** New environments, review apps and rebuilt test sites all have a recent `install_time`. In the dry run, a freshly installed test site reported `REINSTALLED` with the default `$SINCE`. Check the inventory and deploy history before calling it a takeover.
 - **Drupal writes its own PHP into `sites/*/files/php/twig/`.** That is the compiled Twig template cache. On a freshly installed test site, a search for PHP under `sites/*/files` returned 232 of these files. The Phase 4c search skips that directory. An attacker could hide a file there too. On a site with takeover signs, look at `files/php/twig/` by hand: each compiled file sits in a folder named after its template (for example `..._page.html.twig_...`).
 - **`settings.php` modification time is a weak signal.** Redeploys, config mounts and image rebuilds reset it. Use it to corroborate, not as a finding.
